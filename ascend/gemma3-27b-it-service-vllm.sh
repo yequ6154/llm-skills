@@ -1,0 +1,32 @@
+docker run -d --rm --name gemma3-27b-w8a8 \
+--privileged \
+--net=host \
+--device=/dev/davinci6 \
+--device=/dev/davinci_manager \
+--device=/dev/devmm_svm \
+--device=/dev/hisi_hdc \
+-v /usr/local/dcmi:/usr/local/dcmi \
+-v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+-v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
+-v /usr/local/sbin:/usr/local/sbin:ro \
+-v /etc/ascend_install.info:/etc/ascend_install.info \
+-v /data:/data \
+-e PYTORCH_NPU_ALLOC_CONF=expandable_segments:True \
+-e TASK_QUEUE_ENABLE=0 \
+-e VLLM_PROMPT_SEQ_BUCKET_MAX=128 \
+-e VLLM_PROMPT_SEQ_BUCKET_MIN=128 \
+-e CPU_AFFINITY_CONF=1,npu_affine:1 \ # important for vLLM performance
+-e ASCEND_RT_VISIBLE_DEVICES=6 \
+m.daocloud.io/quay.io/ascend/vllm-ascend:v0.11.0rc2 \
+/bin/bash -c "VLLM_USE_V1=1 python3 -m vllm.entrypoints.openai.api_server \
+--model /data/modelscope/models/LLM-Research/gemma-3-27b-it-quantized-w8a8 \
+--dtype auto \
+--quantization ascend \
+--enable-chunked-prefill --no-enable-prefix-caching \
+--served-model-name gemma3-27b-w8a8 \
+--max-model-len 16384 \
+--max-num-seqs 20 --disable-fastapi-docs --enable-request-id-headers \
+--gpu-memory-utilization 0.9 --distributed-executor-backend mp -tp 1 \
+--async-scheduling \
+--compilation-config '{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}' \
+--port 38322"
