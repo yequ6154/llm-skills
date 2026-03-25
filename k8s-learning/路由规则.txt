@@ -1,0 +1,48 @@
+# 完整的映射链条：
+外部请求 -> VirtualService -> Service -> Pod -> Container
+
+具体解析：
+===yaml===
+http:
+  - match:
+      - uri:
+          prefix: "/yolo-triton"      # 步骤1：匹配外部请求路径
+    rewrite:
+      uri: "/v2/models/yolo"          # 步骤2：重写内部请求路径（yolo名称是config.pbtxt文件中第一行的name）
+    route:
+      - destination:
+          host: yolo-triton.default.svc.cluster.local  # 步骤3：目标服务
+          port:
+            number: 9000                                # 步骤4：服务端口
+
+映射过程（以curl为例）：（Triton的推理API是/v2/models/{model_name}/infer）
+# 外部请求
+curl https://pre-llm-inference-api.brapp.com/yolo-triton
+
+# 1. Istio Ingress Gateway收到请求
+#    路径：/yolo-triton
+#    主机头：pre-llm-inference-api.brapp.com
+
+# 2. VirtualService匹配规则
+#    - 匹配hosts: pre-llm-inference-api.brapp.com ✓
+#    - 匹配uri prefix: /yolo-triton ✓
+
+# 3. VirtualService执行rewrite
+#    /yolo-triton → /v2/models/yolo
+
+# 4. VirtualService路由到目标
+#    发送请求到：yolo-triton.default.svc.cluster.local:9000
+#    路径：/v2/models/yolo
+
+# 5. Service接收请求
+#    Service名称：yolo-triton
+#    Service端口：9000（docker部署的时候：-p 9000:8000）
+#    Service selector匹配：app=yolo-triton, version=v1.0
+
+# 6. Service转发到Pod
+#    targetPort: 8000（容器端口）
+#    实际发送到：Pod IP:8000
+
+# 7. 容器接收请求
+#    Triton监听在容器内的8000端口
+#    最终访问：http://<pod-ip>:8000/v2/models/yolo

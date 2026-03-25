@@ -1,0 +1,40 @@
+Triton Inference Server有两个健康检查端点：
+Liveness端点：/v2/health/live - 检查服务器进程是否存活
+Readiness端点：/v2/health/ready - 检查模型是否加载完成
+
+
+startupProbe:
+    httpGet:
+        path: /v2/health/live # 检查服务器是否启动
+        port: 8000
+        httpHeaders:
+        - name: Host
+            value: localhost
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    failureThreshold: 100
+    timeoutSeconds: 10
+    
+livenessProbe:
+    httpGet:
+        path: /v2/health/live  # 检查服务器是否还在运行
+        port: 8000
+        httpHeaders:
+        - name: Host
+            value: localhost
+    initialDelaySeconds: 90
+    periodSeconds: 30
+    failureThreshold: 10
+    timeoutSeconds: 10
+    
+readinessProbe:
+    httpGet:
+        path: /v2/health/ready   # 检查模型是否就绪可以接受请求
+        port: 8000
+        httpHeaders:
+        - name: Host
+            value: localhost
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    failureThreshold: 10
+    timeoutSeconds: 10

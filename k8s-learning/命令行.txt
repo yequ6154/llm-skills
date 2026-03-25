@@ -1,0 +1,79 @@
+进入k8s:
+# 查看当前排队请求
+curl http://localhost:8000/metrics | grep "vllm_num_requests_waiting"
+
+# 或者查看更详细的vLLM状态
+curl http://localhost:8000/stats
+
+# 查看首token
+curl -s localhost:8000/metrics | grep time_to_first_token
+#查看吞吐
+curl -s localhost:8000/metrics | grep request_success_total
+
+
+
+
+1、查看pod大概情况
+kubectl get pods -l app=qwen2-5-14b-instruct 
+
+2、查看详细情况,部署失败时,重点关注Events(首要关注点)、Conditions、Containers字段
+kubectl describe pod qwen2-5-14b-instruct-7fd575d8c-m4dt
+
+3、查看前一个容器的日志
+kubectl logs qwen2-5-14b-instruct-7fd575d8c-m4dth —previous
+
+
+1、查看异常的pod(查看状态)
+kubectl get pods 
+
+2、删除 Deployment(会自动删除相关的 Pods)
+kubectl delete deployment my-llm-app
+
+3、删除service
+kubectl delete service <service-name>
+
+4、删除 Pod(直接删除 Pod 可能还会被重建)
+kubectl delete pod <pod-name>
+
+5、删除所有相关资源
+kubectl delete all -l app=<app-label>
+
+
+
+# 3. 部署资源
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl apply -f virtualservice.yaml
+
+# 4. 检查部署状态
+kubectl get pods -l app=yolov8-triton
+kubectl logs -f deployment/yolov8-triton
+
+# 5. 测试服务
+kubectl port-forward svc/yolov8-triton 8080:80
+curl http://localhost:8080/v2/health/ready
+
+
+# 查看所有节点的污点
+kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints
+
+# 添加污点（阻止调度）
+kubectl taint nodes node1 llm-exclusive=qwen3:NoSchedule
+
+# 添加污点（尽量不调度）
+kubectl taint nodes node2 gpu=true:PreferNoSchedule
+
+# 添加污点（驱逐现有Pod）
+kubectl taint nodes node3 maintenance=true:NoExecute
+
+# 删除指定污点
+kubectl taint nodes node1 llm-exclusive=qwen3:NoSchedule-
+
+# 删除某个key的所有污点
+kubectl taint nodes node1 llm-exclusive-
+
+# 删除所有污点（不推荐）
+kubectl patch node node1 -p '{"spec":{"taints":[]}}'
+
+# 扩容命令
+kubectl scale deploy vl-bundle-service-ocr-group0 --replicas=7

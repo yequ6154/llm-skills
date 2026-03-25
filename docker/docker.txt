@@ -1,0 +1,26 @@
+1、交互式界面：
+docker run -it —-entrypoint bash images:tag
+
+
+2、创建并后续进入docker
+docker run -d  images:tag sleep infinity     或者 docker run -d  images:tag tail -f /dev/null
+注意：
+    镜像为vllm等时，镜像的入口点是api_server.py等，所以需要覆盖这个entrypoint，可以通过以下方式：
+docker run -d --name lei-test \
+--runtime nvidia \
+--gpus='"device=4"' \
+--network host --ipc=host \
+-v /data2:/data2 \
+-v /data/logs:/vllm-workspace/logs \
+--entrypoint bash \
+registry.100credit.cn/xdynamic/x86_64/nvidia/vllm-openai:v0.11.0 \
+-c "tail -f /dev/null"
+
+
+docker stats
+
+docker inspect container
+
+强制删除：docker rm -f container / docker kill container
+
+

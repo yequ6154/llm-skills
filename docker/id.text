@@ -1,0 +1,19 @@
+docker内修改用户：
+1、起容器时：
+命令行添加：-u $(id -u):$(id -g)
+
+2、查看当前宿主机的用户：
+(base) xd@y108p34:/home/lei.xiong$ id 
+uid=1012(xd) gid=1013(xd) groups=1013(xd),1014(docker)
+
+3、以root用户进入：
+docker exec -it -u root lei.xiong /bin/bash
+
+4、现在你有 root 权限，可以执行 groupadd
+root@f9790692ebb7:/vllm-workspace# groupadd -g 1013 xd
+root@f9790692ebb7:/vllm-workspace# useradd -u 1012 -g 1013 -m -s /bin/bash xd
+
+# 退出并重新以普通用户身份进入
+root@f9790692ebb7:/vllm-workspace# exit
+docker exec -it -u xd lei.xiong /bin/bash
+# 现在应该显示：xd@f9790692ebb7:/vllm-workspace$

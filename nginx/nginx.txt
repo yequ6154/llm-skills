@@ -1,0 +1,70 @@
+# /etc/nginx/conf.d/vllm_load_balance.conf
+# 此配置将流量代理到运行在本地8001-8004端口的4个vLLM容器
+
+events {
+    worker_connections 1024; # 可根据需要调整
+}
+
+http {
+    # 定义上游服务器组（你的4个vLLM容器）
+    upstream vllm_ascend_cluster {
+        # 使用least_conn策略将请求分发到当前连接数最少的后端
+        least_conn;  # 默认是轮询（round robin，无需显式配置）
+        server 127.0.0.1:8001 max_fails=3 fail_timeout=30s;
+        server 127.0.0.1:8002 max_fails=3 fail_timeout=30s;
+        server 127.0.0.1:8003 max_fails=3 fail_timeout=30s;
+        server 127.0.0.1:8004 max_fails=3 fail_timeout=30s;
+    }
+
+    server {
+        # Nginx对外提供服务的端口
+        listen 8080;
+        server_name localhost; # 或你的服务器IP/域名
+
+        # 访问日志（可选）
+        access_log /var/log/nginx/vllm_access.log;
+        error_log /var/log/nginx/vllm_error.log;
+
+        location / {
+            # 将请求代理到上游服务器组
+            proxy_pass http://vllm_ascend_cluster;
+
+            # 以下是一些重要的代理设置，对于AI模型长耗时请求尤其关键
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # 设置超时时间，避免长推理请求被中断
+            proxy_read_timeout 600s;
+            proxy_connect_timeout 75s;
+            proxy_send_timeout 600s;
+
+            # 禁用缓冲，对于流式响应（如SSE）很重要
+            proxy_buffering off;
+            proxy_request_buffering off;
+        }
+
+        # 可选：添加一个健康检查端点
+        location /health {
+            access_log off;
+            return 200 "healthy\n";
+        }
+    }
+}
+
+
+
+##########
+测试并应用配置
+##########
+# 1. 测试配置文件语法是否正确（非常重要！）
+sudo nginx -t
+# 如果成功，你会看到：`nginx: configuration file /etc/nginx/nginx.conf test is successful`
+
+# 2. 如果测试成功，重新加载Nginx使新配置生效（无缝，不会断开现有连接）
+sudo nginx -s reload
+
+# 3. 如果Nginx还未运行，则启动它
+sudo systemctl start nginx  # 或 `sudo nginx`
+

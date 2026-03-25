@@ -1,0 +1,24 @@
+修改的文件：
+/home/lei.xiong/project/br-vision-asset-classification/vllm/model_executor/models/qwen2_5_vl.py
+/home/lei.xiong/project/br-vision-asset-classification/vllm/config/__init__.py
+/home/lei.xiong/project/br-vision-asset-classification/vllm/model_executor/layers/pooler.py
+/home/lei.xiong/project/br-vision-asset-classification/vllm/v1/worker/gpu_model_runner.py
+/home/lei.xiong/project/br-vision-asset-classification/vllm/v1/worker/gpu_worker.py
+/home/lei.xiong/project/br-vision-asset-classification/vllm/model_executor/models/adapters.py
+
+
+启动命令：
+python3 -m debugpy --listen 0.0.0.0:4567 --wait-for-client /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/api_server.py --model /models/jina-embeddings-text-matching-v4 --trust-remote-code --no-enable-prefix-caching  --max-model-len 8192 --served-model-name jina-embeddings-text-matching-v4 --gpu-memory-utilization 0.9 --enable-request-id-headers --disable-fastapi-docs -tp 1 --max-num-seqs 32 --enable-log-requests --task embed --runner pooling --port 9090 --enforce-eager
+
+python3 -m debugpy --listen 0.0.0.0:4567 --wait-for-client /usr/local/lib/python3.12/dist-packages/vllm/entrypoints/openai/api_server.py --model /models/br-vision-asset-classification-v1.0-20260113 --trust-remote-code --no-enable-prefix-caching  --max-model-len 8192 --served-model-name br-vision-asset-classification-v1 --gpu-memory-utilization 0.9 --enable-request-id-headers --disable-fastapi-docs -tp 1 --max-num-seqs 32 --enable-log-requests --task embed --runner pooling --port 9090 --enforce-eager
+
+curl 'http://localhost:9090/v1/embeddings' -H 'content-type: application/json' -X POST -d '{
+    "model": "br-vision-asset-classification-v1",
+    "messages": [{"role": "user", 
+                "content": [
+                    {"type": "text", "text":  "你是银行贷后材料分类专家。给出此图片分类。"},
+		{"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="}}
+                ]
+            }
+        ]
+ }'

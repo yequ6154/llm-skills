@@ -1,0 +1,247 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vl-bundle-service-ocr-group0
+  namespace: default
+  labels:
+    app: vl-bundle-service-ocr-group0
+    alert_group: cybertron
+    # environment: prod
+    # group: "ocr"
+spec:
+  selector:
+    matchLabels:
+      app: vl-bundle-service-ocr-group0
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        zone: YZ
+        region: BJ
+        app: vl-bundle-service-ocr-group0
+        group: "ocr"
+        date: "20260127"
+        # environment: prod
+      annotations:
+        sidecar.istio.io/inject: 'false'
+    spec:
+      terminationGracePeriodSeconds: 15
+      affinity:
+        # nodeAffinity:
+        #  requiredDuringSchedulingIgnoredDuringExecution:
+        #    nodeSelectorTerms:
+        #    - matchExpressions:
+        #      - key: kubernetes.io/hostname
+        #        operator: In
+        #        values:
+        #        - 10.150.108.37
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: vl-bundle-service-ocr-group0
+                topologyKey: kubernetes.io/hostname
+
+      hostAliases:
+        - ip: 192.168.22.135
+          hostnames:
+            - pypi.100credit.cn
+      volumes:
+        - name: cached-models
+          hostPath:
+            path: /mnt/seaweedfs/data/buckets/cybertron/llmops-shared-pv/cached_models
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "20Gi"
+        - name: log
+          hostPath:
+            path: /data2/logs
+            type: DirectoryOrCreate
+        - name: vllm-logger-config
+          configMap:
+            name: vl-bundle-service-ocr-group0-cm
+      containers:
+        - name: vl-bundle-service-ocr-group0
+          image: registry.100credit.cn/xdynamic/x86_64/nvidia/vllm-openai:v0.11.0___dynamic-kvcache-lpz-v0.2.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+          ports:
+            - name: model-0-http
+              containerPort: 8001
+            - name: model-1-http
+              containerPort: 8002
+            - name: model-2-http
+              containerPort: 8003
+          volumeMounts:
+            - name: cached-models
+              mountPath: /root/.cache/models
+            - name: shm
+              mountPath: /dev/shm
+            - name: log
+              mountPath: /vllm-workspace/logs
+              subPathExpr: $(POD_NAME)
+            - name: vllm-logger-config
+              mountPath: /vllm-workspace/config
+          env:
+            - name: ACTIVE_OOM_KILLER
+              value: "false"
+            - name: GPU_CORE_UTILIZATION_POLICY
+              value: "default"
+            - name: CUDA_DISABLE_CONTROL
+              value: "true"
+            - name: TZ
+              value: Asia/Shanghai
+
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.hostIP
+
+            # vllm envs
+            - name: VLLM_IMAGE_FETCH_TIMEOUT
+              value: "999999999"
+            - name: VLLM_AUDIO_FETCH_TIMEOUT
+              value: "999999999"
+            - name: VLLM_RPC_TIMEOUT
+              value: "999999999"
+            - name: VLLM_ENGINE_ITERATION_TIMEOUT_S
+              value: "999999999"
+            - name: VLLM_ENGINE_TIMEOUT_S
+              value: "999999999"
+
+
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              mkdir -p /vllm-workspace/logs &&
+              echo "Starting mineru2-5-2509-1-2b..." &&
+              CUDA_VISIBLE_DEVICES=0 VLLM_LOGGING_CONFIG_PATH=/vllm-workspace/config/model-0.vllm.logger.conf.json vllm serve /root/.cache/models/hf-mirrors/MinerU2.5-2509-1.2B/release-v0/
+              --trust-remote-code
+              --dtype bfloat16
+              --max-model-len 16384
+              --enable-chunked-prefill
+              --no-enable-prefix-caching
+              --served-model-name mineru2-5-2509-1-2b
+              --distributed-executor-backend mp
+              --limit-mm-per-prompt '{"audio": 0, "image": 1, "video": 0}'
+              -tp 1
+              --max-num-seqs 10
+              --mm-encoder-tp-mode data
+              --mm-processor-cache-gb 0
+              --disable-fastapi-docs
+              --enable-request-id-headers
+              --enable-log-requests
+              --logits-processors logits_processor_zoo.vllm.no_repeat_ngram:NoRepeatNGramLogitsProcessor
+              --host 0.0.0.0
+              --port 8001 &
+              echo "Waiting for mineru2-5-2509-1-2b to be ready on port 8001..." &&
+              while ! curl -s http://localhost:8001/health > /dev/null 2>&1; do sleep 5; done &&
+              echo "mineru2-5-2509-1-2b is ready on port 8001" &&
+              echo "Starting br-table-1-2b-v1..." &&
+              CUDA_VISIBLE_DEVICES=0 VLLM_LOGGING_CONFIG_PATH=/vllm-workspace/config/model-1.vllm.logger.conf.json vllm serve /root/.cache/models/vision-llm/BR-Table-1.2B/release-v3/
+              --trust-remote-code
+              --dtype bfloat16
+              --max-model-len 16384
+              --enable-chunked-prefill
+              --no-enable-prefix-caching
+              --served-model-name br-table-1-2b-v1
+              --distributed-executor-backend mp
+              --limit-mm-per-prompt '{"audio": 0, "image": 1, "video": 0}'
+              -tp 1
+              --max-num-seqs 10
+              --mm-encoder-tp-mode data
+              --mm-processor-cache-gb 0
+              --disable-fastapi-docs
+              --enable-request-id-headers
+              --enable-log-requests
+              --logits-processors logits_processor_zoo.vllm.no_repeat_ngram:NoRepeatNGramLogitsProcessor
+              --host 0.0.0.0
+              --port 8002 &
+              echo "Waiting for br-table-1-2b-v1 to be ready on port 8002..." &&
+              while ! curl -s http://localhost:8002/health > /dev/null 2>&1; do sleep 5; done &&
+              echo "br-table-1-2b-v1 is ready on port 8002" &&
+              echo "Starting br-vl-findoc-1-2b-v1..." &&
+              CUDA_VISIBLE_DEVICES=0 VLLM_LOGGING_CONFIG_PATH=/vllm-workspace/config/model-2.vllm.logger.conf.json vllm serve /root/.cache/models/vision-llm/BR-VL-FinDoc-1.2B-V1/release-v2/
+              --trust-remote-code
+              --dtype bfloat16
+              --max-model-len 16384
+              --enable-chunked-prefill
+              --no-enable-prefix-caching
+              --served-model-name br-vl-findoc-1-2b-v1
+              --mm-processor-cache-gb 0
+              --mm-processor-cache-type lru
+              --mm-encoder-tp-mode data
+              --compilation-config '{"level": 3, "cudagraph_capture_sizes": [1,2,3,4,5,6,7,8,9,10]}'
+              --max-num-seqs 8
+              --disable-fastapi-docs
+              --enable-request-id-headers
+              --override-generation-config '{"temperature": 0.2}'  
+              --enable-log-requests
+              -tp 1
+              --host 0.0.0.0
+              --port 8003 &
+              echo "Waiting for br-vl-findoc-1-2b-v1 to be ready on port 8003..." &&
+              while ! curl -s http://localhost:8003/health > /dev/null 2>&1; do sleep 5; done &&
+              echo "br-vl-findoc-1-2b-v1 is ready on port 8003" &&
+              echo "All services are ready. Waiting for background processes..." &&
+              wait
+          resources:
+            limits:
+              cpu: "16"
+              memory: 128G
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "16"
+              memory: 128G
+              nvidia.com/gpu: "1"
+
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "curl -sf http://localhost:8001/health && curl -sf http://localhost:8002/health && curl -sf http://localhost:8003/health"
+            initialDelaySeconds: 60
+            periodSeconds: 1
+            failureThreshold: 1200
+
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "curl -sf http://localhost:8001/health && curl -sf http://localhost:8002/health && curl -sf http://localhost:8003/health"
+            initialDelaySeconds: 3
+            periodSeconds: 3
+
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "curl -sf http://localhost:8001/health && curl -sf http://localhost:8002/health && curl -sf http://localhost:8003/health"
+            initialDelaySeconds: 3
+            periodSeconds: 3
+
