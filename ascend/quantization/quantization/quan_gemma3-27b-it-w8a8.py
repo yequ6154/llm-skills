@@ -1,5 +1,5 @@
 #量化工具modelslim
-https://gitcode.com/Ascend/msit/blob/master/msmodelslim/docs/%E6%8E%A5%E5%8F%A3%E8%AF%B4%E6%98%8E/Python-API%E6%8E%A5%E5%8F%A3%E8%AF%B4%E6%98%8E/%E9%87%8F%E5%8C%96%E6%8E%A5%E5%8F%A3/%E8%AE%AD%E7%BB%83%E5%90%8E%E9%87%8F%E5%8C%96%EF%BC%88PyTorch%EF%BC%89/QuantConfig.md  
+# https://gitcode.com/Ascend/msit/blob/master/msmodelslim/docs/%E6%8E%A5%E5%8F%A3%E8%AF%B4%E6%98%8E/Python-API%E6%8E%A5%E5%8F%A3%E8%AF%B4%E6%98%8E/%E9%87%8F%E5%8C%96%E6%8E%A5%E5%8F%A3/%E8%AE%AD%E7%BB%83%E5%90%8E%E9%87%8F%E5%8C%96%EF%BC%88PyTorch%EF%BC%89/QuantConfig.md  
 
 
 # Copyright Huawei Technologies Co., Ltd. 2025. All rights reserved.
@@ -55,12 +55,12 @@ def model_generate_test(model, processor, text):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', type=str, default='/home/s30048949/LLM-Research/gemma-3-27b-it')
+    parser.add_argument('--model_path', type=str, default='/data/modelscope/models/LLM-Research/gemma-3-27b-it')
     parser.add_argument('--calib_images', type=str,
                         default='')
     parser.add_argument('--save_directory', type=str,
-                        default='/home/s30048949/weights/LLM-Research/gemma-3-27b-it_w8a8_test')
-    parser.add_argument('--part_file_size', type=int, default=None)
+                        default='/data/modelscope/models/vllm-ascend/gemma-3-27b-it-w8a8-v1')
+    parser.add_argument('--part_file_size', type=int, default=5)
     parser.add_argument('--w_bit', type=int, default=8)
     parser.add_argument('--a_bit', type=int, default=8)
     parser.add_argument('--device_type', type=str, choices=[CPU, NPU], default=NPU)

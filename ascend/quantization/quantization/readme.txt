@@ -10,5 +10,16 @@
 3）所以：model.layers.*能被vllm识别；对vision层加载，需要手动去了model.前缀（需要修改quant_model_description.json文件vision的key，去掉model.前缀）
 
 
+量化gemma3-27b-it-w8a8时，
+1、先git clone https://gitcode.com/Ascend/msit.git
+2、进入到msit/msmodelslim的目录并运行安装脚本
+cd msit/msmodelslim
+bash install.sh
+
+3、
+1)将w8a8权重目录下的quant_model_description.json中的model.language_model.替换为model.
+2)model.vision_tower.vision_model.替换为vision_tower.vision_model.
+3)将w8a8权重目录下的model.safetensors.index.json文件中的权重文件名称全部改为量化的权重文件名称
+
 
 
