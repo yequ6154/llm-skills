@@ -1044,3 +1044,533 @@ MLP/FFN	不区分	统一矩阵乘法
 核心设计哲学：vLLM 不需要显式标记"这是 prefill token""这是 decode token"。
 它通过 query_start_loc（每个请求多少个新 query）和 seq_lens（每个请求总共要 attend 多长的 KV）这两个元数据，让 FlashAttention 的 variable-length kernel 自然地、在同一个 CUDA kernel 调用中处理混合 batch。这就是 chunked prefill 能高效工作的根本原因。
 '''
+
+Q-9:投机推理是怎样的逻辑，梳理下代码及底层work线程怎么处理的，以及大模型是怎么验证的，什么机制决定选择小模型的输出
+A-9:
+'''
+一、投机推理的核心思想
+普通自回归生成：大模型每次 forward 只产出 1 个 token，速度受限于大模型的推理延迟。
+
+投机推理的核心洞察：大模型验证 K 个 token 的开销 ≈ 生成 1 个 token 的开销（因为 K 个 token 可以并行 forward），但如果猜对了就等于"免费"获得了多个 token。
+
+普通生成 (5个token):  [Forward] [Forward] [Forward] [Forward] [Forward]
+                      ═══════╪═══════╪═══════╪═══════╪═══════╪
+                      耗时: 5 × T_large
+投机推理 (5个token):  [Draft×5] [Verify一次] → 如果全对,一步出5个token
+                      ═══════╪══════════╪
+                      耗时: T_draft + T_large ≈ 1.x × T_large
+二、vLLM 中的投机推理方法
+vLLM V1 支持多种 drafter（草稿生成器）：
+
+方法	类名	文件	原理
+Draft Model	DraftModelProposer	draft_model.py	独立小模型生成草稿
+EAGLE	EagleProposer	eagle.py	利用大模型 hidden states 的轻量头
+EAGLE3 / DFlash	DFlashProposer	dflash.py	EAGLE 的优化变体
+Medusa	MedusaProposer	medusa.py	多头并行预测
+N-gram	NgramProposer	ngram_proposer.py	基于历史 token 模式匹配（无模型）
+N-gram GPU	NgramProposerGPU	ngram_proposer_gpu.py	GPU 加速的 N-gram
+Suffix	SuffixDecodingProposer	suffix_decoding.py	后缀树匹配
+三、完整执行流程
+                        一个完整的投机推理迭代
+    ┌──────────────────────────────────────────────────────┐
+    │                                                      │
+    │  Step 1: Scheduler 调度                               │
+    │  ┌─────────────────────────────────────────────┐     │
+    │  │ 把上一轮 drafter 猜测的 K 个 draft token      │     │
+    │  │ 连同原始 token 一起放入 scheduled_tokens       │     │
+    │  │ 例如: 请求A 原本只有 1 个 decode token         │     │
+    │  │       现在变成 1 + K 个 token (1原始 + K草稿)  │     │
+    │  └─────────────────────────────────────────────┘     │
+    │                      ↓                               │
+    │  Step 2: 大模型 Forward (验证)                        │
+    │  ┌─────────────────────────────────────────────┐     │
+    │  │ 大模型一次 forward 处理所有 1+K 个 token       │     │
+    │  │ 在每个 draft position 产生 target logits       │     │
+    │  │ 这就是"验证" — 大模型告诉你它在每个位置         │     │
+    │  │ 会选择什么 token                               │     │
+    │  └─────────────────────────────────────────────┘     │
+    │                      ↓                               │
+    │  Step 3: Rejection Sampling (接受/拒绝)               │
+    │  ┌─────────────────────────────────────────────┐     │
+    │  │ 逐个比较 draft token vs target token           │     │
+    │  │ - 匹配: 接受,继续验证下一个                     │     │
+    │  │ - 不匹配: 拒绝,用 target 的 token 替换          │     │
+    │  │          后续 draft 全部丢弃                    │     │
+    │  │ - 全部接受: 额外获得一个 bonus token!           │     │
+    │  └─────────────────────────────────────────────┘     │
+    │                      ↓                               │
+    │  Step 4: Draft 新一轮草稿                             │
+    │  ┌─────────────────────────────────────────────┐     │
+    │  │ 用 drafter 为下一次迭代猜测 K 个新 token        │     │
+    │  │ (利用大模型刚产出的 hidden states / token)      │     │
+    │  └─────────────────────────────────────────────┘     │
+    │                      ↓                               │
+    │              回到 Step 1,循环                         │
+    └──────────────────────────────────────────────────────┘
+四、代码层面的详细流程
+Step 1: 输入准备 — 把 draft token 塞入 batch
+在 gpu_model_runner.py 的 _prepare_inputs 中，当存在 scheduled_spec_decode_tokens 时，会调用 _calc_spec_decode_metadata：
+
+# gpu_model_runner.py
+def _calc_spec_decode_metadata(self, ...):
+    # 计算每个请求的 draft token 数量
+    # 构建 target_logits_indices: 大模型需要在哪些位置产出 logits 来验证
+    # 构建 bonus_logits_indices: 如果全部接受,bonus token 从哪个位置采样
+    # 构建 draft_token_ids: 每个 draft 位置对应的小模型猜测的 token
+假设请求 A 有 3 个 draft token [d1, d2, d3]，输入 batch 变成：
+
+原始 token:  [A_current]
+加入 draft:  [A_current, d1, d2, d3]
+大模型 forward 后产出 4 个位置的 logits:
+  logits[0] → 验证 d1 (在 A_current 之后应该是什么)
+  logits[1] → 验证 d2 (在 d1 之后应该是什么)
+  logits[2] → 验证 d3 (在 d2 之后应该是什么)
+  logits[3] → bonus (在 d3 之后应该是什么,如果全部接受)
+Step 2: 大模型 Forward — 一次验证所有 draft
+# gpu_model_runner.py -> execute_model
+hidden_states = model(input_ids, positions, ...)  # 一次 forward
+sample_hidden_states = hidden_states[logits_indices]  # 取验证位置
+logits = model.compute_logits(sample_hidden_states)   # 计算 logits
+关键：大模型只做一次 forward，但由于 draft token 也在输入中，大模型在每个 draft 位置都会产出一个概率分布。这就是"验证" — 不是单独跑一次验证，而是通过正常 forward 自然产出。
+
+Step 3: Rejection Sampling — 核心验证代码
+_sample 方法检测到有 spec_decode_metadata 时，调用 RejectionSampler：
+
+# gpu_model_runner.py
+def _sample(self, logits, spec_decode_metadata):
+    if spec_decode_metadata is None:
+        return self.sampler(logits=logits, ...)  # 普通采样
+    
+    # 投机推理的验证+采样
+    sampler_output = self.rejection_sampler(
+        spec_decode_metadata,
+        draft_probs=None,     # N-gram 等无概率分布的 drafter
+        logits=logits,        # 大模型的 logits
+        sampling_metadata=...,
+    )
+    return sampler_output
+RejectionSampler.forward 的核心流程：
+
+# rejection_sampler.py -> forward
+def forward(self, metadata, draft_probs, logits, sampling_metadata):
+    # 1. 采样 bonus token (如果全部 draft 被接受才用到)
+    bonus_logits = logits[bonus_logits_indices]
+    bonus_token_ids = self.sampler(logits=bonus_logits, predict_bonus_token=True)
+    
+    # 2. 获取每个 draft 位置的 target logits
+    target_logits = logits[target_logits_indices]  # [num_draft_tokens, vocab]
+    
+    # 3. 应用采样约束 (temperature, top-k, top-p)
+    target_logits = apply_sampling_constraints(target_logits, ...)
+    
+    # 4. 执行 rejection sampling
+    output_token_ids = rejection_sample(
+        draft_token_ids,    # 小模型猜的 token
+        target_logits,      # 大模型在每个位置的概率分布
+        bonus_token_ids,    # bonus token
+        ...
+    )
+    return SamplerOutput(sampled_token_ids=output_token_ids)
+Step 4: Drafter 提出新草稿
+# gpu_model_runner.py -> propose_draft_token_ids
+def propose_draft_token_ids(self, ...):
+    if spec_config.use_eagle():
+        # EAGLE: 利用大模型 hidden_states 驱动轻量头
+        draft_token_ids = self.drafter.propose(
+            target_token_ids=target_token_ids,
+            target_positions=target_positions,
+            target_hidden_states=target_hidden_states,  # 关键!
+            next_token_ids=next_token_ids,
+            ...
+        )
+    elif spec_config.uses_draft_model():
+        # 独立小模型
+        draft_token_ids = self.drafter.propose(
+            target_token_ids=...,
+            target_hidden_states=None,  # 不传 hidden states
+            ...
+        )
+    elif "ngram" in method:
+        # N-gram: 纯模式匹配,不用模型
+        draft_token_ids = self.drafter.propose(self.input_batch, ...)
+五、两种验证机制的详细算法
+机制 A: Greedy 验证 (temperature=0)
+对应 Triton kernel rejection_greedy_sample_kernel：
+
+对于每个 draft 位置 pos = 0, 1, ..., K-1:
+    draft_token = 小模型猜的 token
+    target_token = argmax(大模型在该位置的 logits)  ← 大模型会选什么
+    
+    if draft_token == target_token:
+        接受! output[pos] = target_token
+    else:
+        拒绝! output[pos] = target_token  ← 用大模型的替换
+        后续所有 draft 全部丢弃,结束
+        
+if 全部接受:
+    output[K] = bonus_token  ← 额外白赚一个 token!
+代码实现：
+
+
+9fd857f9-f048-4030-9dc1-56d4723bcd96.txt
+Lines 674-693
+    rejected = False
+    for pos in range(num_draft_tokens):
+        if not rejected:
+            draft_token_id = tl.load(draft_token_ids_ptr + start_idx + pos)
+            target_argmax_id = tl.load(target_argmax_ptr + start_idx + pos)
+            tl.store(
+                output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos,
+                target_argmax_id,
+            )
+            if draft_token_id != target_argmax_id:
+                # Reject.
+                rejected = True
+    if not rejected:
+        # If all tokens are accepted, append the bonus token.
+        bonus_token_id = tl.load(bonus_token_ids_ptr + req_idx)
+        tl.store(
+            output_token_ids_ptr + req_idx * (max_spec_len + 1) + num_draft_tokens,
+            bonus_token_id,
+        )
+举例：
+
+小模型猜: [the, cat, sat, on]    (K=4)
+大模型验: [the, cat, is,  ...]
+pos=0: draft=the, target=the → 接受 ✓
+pos=1: draft=cat, target=cat → 接受 ✓
+pos=2: draft=sat, target=is  → 拒绝 ✗ → output[2]=is, 停止
+最终输出: [the, cat, is]  (3个token, 比普通生成的1个多了2个)
+机制 B: Random 验证 (temperature>0)
+基于论文 Leviathan et al. 2022 的概率接受方法。
+
+对应 Triton kernel rejection_random_sample_kernel：
+
+对于每个 draft 位置 pos = 0, 1, ..., K-1:
+    draft_token = 小模型猜的 token
+    p_draft  = 小模型对 draft_token 的概率 (如果有)
+    p_target = 大模型对 draft_token 的概率
+    u        = uniform(0, 1) 随机数
+    
+    if p_draft > 0 AND p_target / p_draft >= u:
+        接受! output[pos] = draft_token
+    else:
+        拒绝! output[pos] = recovered_token  ← 从调整后的分布采样
+        后续所有 draft 全部丢弃
+        
+if 全部接受:
+    output[K] = bonus_token
+代码实现：
+
+
+9fd857f9-f048-4030-9dc1-56d4723bcd96.txt
+Lines 722-755
+    rejected = False
+    for pos in range(num_draft_tokens):
+        if not rejected:
+            draft_token_id = tl.load(draft_token_ids_ptr + start_idx + pos)
+            if NO_DRAFT_PROBS:
+                draft_prob = 1
+            else:
+                draft_prob = tl.load(
+                    draft_probs_ptr + (start_idx + pos) * vocab_size + draft_token_id
+                )
+            target_prob = tl.load(
+                target_probs_ptr + (start_idx + pos) * vocab_size + draft_token_id
+            )
+            uniform_prob = tl.load(uniform_probs_ptr + start_idx + pos)
+            # NOTE(woosuk): While the draft probability should never be 0,
+            # we check it to avoid NaNs. If it happens to be 0, we reject.
+            if draft_prob > 0 and target_prob / draft_prob >= uniform_prob:
+                # Accept.
+                token_id = draft_token_id
+            else:
+                # Reject. Use recovered token.
+                rejected = True
+                token_id = tl.load(recovered_token_ids_ptr + start_idx + pos)
+            tl.store(
+                output_token_ids_ptr + req_idx * (max_spec_len + 1) + pos, token_id
+            )
+    if not rejected:
+        # If all tokens are accepted, append the bonus token.
+        bonus_token_id = tl.load(bonus_token_ids_ptr + req_idx)
+        tl.store(
+            output_token_ids_ptr + req_idx * (max_spec_len + 1) + num_draft_tokens,
+            bonus_token_id,
+        )
+Recovered token（恢复 token）的计算逻辑：
+
+当 draft 被拒绝时，不是简单用 target 的 argmax，而是从调整后的概率分布采样：
+
+adjusted_prob[v] = max(p_target[v] - p_draft[v], 0)   对每个 vocab token v
+recovered_token = sample_from(adjusted_prob)
+
+9fd857f9-f048-4030-9dc1-56d4723bcd96.txt
+Lines 832-833
+                    prob = tl.maximum(target_prob - draft_prob, 0.0)
+                # NOTE(woosuk): We don't need `prob = prob / tl.sum(prob)` here because
+这保证了投机推理的输出分布与直接用大模型生成完全一致 — 数学上等价，不会降低生成质量。
+
+六、Worker 线程如何处理
+整个投机推理在同一个 GPU Worker 进程内完成，不需要额外的 worker：
+
+┌────────────────────── GPU Worker ──────────────────────┐
+│                                                        │
+│  gpu_model_runner.execute_model():                     │
+│                                                        │
+│  ┌──────────────────────────────────────┐              │
+│  │ 1. _prepare_inputs()                 │              │
+│  │    - 把上轮 draft tokens 加入 batch   │              │
+│  │    - 构建 SpecDecodeMetadata          │              │
+│  │    - 计算 logits_indices              │              │
+│  └───────────────┬──────────────────────┘              │
+│                  ↓                                      │
+│  ┌──────────────────────────────────────┐              │
+│  │ 2. model.forward()                   │ ← 大模型      │
+│  │    - 一次 forward 处理 原始+draft     │   一次forward  │
+│  │    - 产出所有位置的 hidden_states     │              │
+│  └───────────────┬──────────────────────┘              │
+│                  ↓                                      │
+│  ┌──────────────────────────────────────┐              │
+│  │ 3. compute_logits() + _sample()      │              │
+│  │    - RejectionSampler 验证 draft      │ ← Triton     │
+│  │    - Greedy/Random 接受/拒绝          │   Kernel      │
+│  │    - 确定最终 output tokens           │              │
+│  └───────────────┬──────────────────────┘              │
+│                  ↓                                      │
+│  ┌──────────────────────────────────────┐              │
+│  │ 4. propose_draft_token_ids()         │              │
+│  │    - drafter.propose()               │ ← 小模型      │
+│  │    - 为下一轮生成 K 个 draft token     │   K次forward  │
+│  │    - 利用大模型的 hidden_states       │  (或1次tree)  │
+│  └───────────────┬──────────────────────┘              │
+│                  ↓                                      │
+│  返回 output + draft_token_ids 给 EngineCore            │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+关键点：
+
+大模型和小模型共享同一个 GPU（EAGLE/Medusa 的参数是大模型的子集 + 轻量头）
+Draft Model 方式的小模型也加载在同一个 GPU 上，只是参数量更少
+N-gram 方式不需要额外模型，在 CPU 上做模式匹配
+七、什么决定选择小模型的输出
+总结验证决策逻辑：
+
+                    Greedy (temperature=0)
+                    ┌───────────────────────────────────┐
+                    │                                   │
+                    │  draft_token == argmax(target) ?   │
+                    │         ↙          ↘              │
+                    │       Yes          No              │
+                    │    接受 draft    拒绝, 用 target    │
+                    │                                   │
+                    └───────────────────────────────────┘
+                    Random (temperature>0)
+                    ┌───────────────────────────────────┐
+                    │                                   │
+                    │  p_target(draft_token)             │
+                    │  ─────────────────── ≥ uniform ?   │
+                    │  p_draft(draft_token)              │
+                    │         ↙          ↘              │
+                    │       Yes          No              │
+                    │    接受 draft    拒绝, 从           │
+                    │               max(p_t-p_d, 0) 采样 │
+                    │                                   │
+                    └───────────────────────────────────┘
+直觉理解：
+
+如果大模型也给了这个 token 很高的概率 → 接受（大小模型一致）
+如果大模型对这个 token 概率低但小模型概率高 → p_target/p_draft 很小 → 大概率拒绝
+如果小模型"碰巧"猜到了大模型也倾向的 token → 接受
+接受率取决于：
+
+小模型与大模型的分布匹配度（越接近，接受率越高）
+Temperature（温度越高，分布越平，接受率通常越高）
+任务难度（简单的补全场景，小模型更容易猜对）
+八、性能收益分析
+假设 draft 生成 K=5 个 token，大模型 forward 时间为 T，小模型（EAGLE 头）为 0.1T：
+
+场景	接受数	产出 token	耗时	等效加速
+全部接受	5/5	6 (5+bonus)	T + 0.1T×5 = 1.5T	6/1.5 = 4x
+接受 3 个	3/5	4 (3+recovered)	1.5T	4/1.5 = 2.67x
+全部拒绝	0/5	1 (recovered)	1.5T	1/1.5 = 0.67x (变慢!)
+所以投机推理的价值完全取决于小模型的预测准确率。vLLM 中 EAGLE 通过直接使用大模型的 hidden states，通常能达到 70-90% 的接受率，实现 2-3x 的加速。
+'''
+
+Q-10:Draft 新一轮草稿，下一轮生成 K 个 draft token--这个代码逻辑在哪可以看到？是每次验证完draft的生成后，就开始下一轮的生成吗，这个逻辑链路是怎样的
+A-10:
+'''
+是的，每次大模型验证完成后，在同一个 sample_tokens() 调用中，紧接着就会生成下一轮的 K 个 draft token。整个链路如下：
+
+完整调用链
+gpu_worker.execute_model()
+  └→ gpu_model_runner.execute_model()     ← 大模型 forward (返回 None, 存状态)
+  └→ gpu_model_runner.sample_tokens()     ← 采样 + draft，一切在这里发生
+       │
+       ├─ 1. _sample(logits, spec_decode_metadata)
+       │     └→ rejection_sampler(...)     ← 验证上一轮 draft，得到 sampled_token_ids
+       │
+       ├─ 2. propose_draft_token_ids(sampled_token_ids)  ← 立刻生成下一轮 draft
+       │     └→ self.drafter.propose(...)
+       │           ├─ 第1步: set_inputs_first_pass()    ← 用大模型 hidden states 准备输入
+       │           ├─ 第1步: model(**model_kwargs)       ← draft 模型 forward #1
+       │           ├─ 第1步: _greedy_sample()            ← 拿到第 1 个 draft token
+       │           │
+       │           ├─ for token_index in range(K-1):     ← 自回归循环
+       │           │     ├─ 更新 input_ids, positions, slot_mapping, seq_lens
+       │           │     ├─ model(**model_kwargs)         ← draft 模型 forward #2, #3, ...
+       │           │     └─ _greedy_sample()              ← 拿到后续 draft token
+       │           │
+       │           └─ return torch.stack(draft_token_ids_list)  ← [batch, K]
+       │
+       ├─ 3. _copy_draft_token_ids_to_cpu()   ← 异步拷贝到 CPU
+       │
+       ├─ 4. _bookkeeping_sync()              ← 更新请求状态
+       │
+       └─ 5. 返回 ModelRunnerOutput            ← 包含验证后的 token + draft ids
+            (draft ids 交给 Scheduler 用于下一轮调度)
+关键代码逐段解读
+第一环：sample_tokens() — 验证后立即生成 draft
+在 gpu_model_runner.py 的 sample_tokens() 中，验证和 draft 生成是紧密串联的：
+
+# gpu_model_runner.py: sample_tokens()
+# ===== 第1步: 验证上一轮的 draft =====
+sampler_output = self._sample(logits, spec_decode_metadata)
+# ===== 第2步: 立即定义 draft 生成闭包 =====
+def propose_draft_token_ids(sampled_token_ids):
+    self._draft_token_ids = self.propose_draft_token_ids(
+        scheduler_output,
+        sampled_token_ids,          # 刚刚验证通过的 token
+        self.input_batch.sampling_metadata,
+        hidden_states,              # 大模型的 hidden states
+        sample_hidden_states,       # 大模型采样位置的 hidden
+        aux_hidden_states,
+        spec_decode_metadata,
+        spec_decode_common_attn_metadata,
+        slot_mappings,
+    )
+    self._copy_draft_token_ids_to_cpu(scheduler_output)
+# ===== 第3步: 根据 drafter 类型决定何时调用 =====
+if use_gpu_toks:
+    # EAGLE/DraftModel: 直接用 GPU 上的 sampled_token_ids，不等 bookkeeping
+    propose_draft_token_ids(sampler_output.sampled_token_ids)   # ← 立即!
+else:
+    propose_drafts_after_bookkeeping = True  # ngram 等需要 CPU token，等 bookkeeping
+# ===== 第4步: bookkeeping (CPU 同步) =====
+valid_sampled_token_ids = self._bookkeeping_sync(...)
+if propose_drafts_after_bookkeeping:
+    # ngram: 需要 CPU 侧的 token 历史
+    propose_draft_token_ids(valid_sampled_token_ids)             # ← bookkeep 后
+第二环：propose_draft_token_ids() — 准备输入并调用 drafter
+# gpu_model_runner.py: propose_draft_token_ids()
+if spec_config.use_eagle() or spec_config.uses_draft_model():
+    # 准备 next_token_ids (验证通过的最新 token)
+    next_token_ids, valid_sampled_tokens_count = (
+        self.drafter.prepare_next_token_ids_padded(sampled_token_ids, ...)
+    )
+    # 准备大模型的 hidden states 和 token ids 作为 drafter 输入
+    target_token_ids = self.input_ids.gpu[:num_scheduled_tokens]
+    target_positions = self._get_positions(num_scheduled_tokens)
+    target_hidden_states = hidden_states[:num_scheduled_tokens]
+    # 调用 drafter.propose() 生成 K 个 draft token
+    draft_token_ids = self.drafter.propose(
+        target_token_ids=target_token_ids,
+        target_positions=target_positions,
+        target_hidden_states=target_hidden_states,    # 大模型的 hidden states
+        next_token_ids=next_token_ids,                 # 验证通过的最新 token
+        common_attn_metadata=common_attn_metadata,     # attention 元数据
+        slot_mappings=slot_mappings,
+    )
+第三环：SpecDecodeBaseProposer.propose() — K 步自回归循环的核心
+这是生成 K 个 draft token 的核心代码，位于 vllm/v1/spec_decode/eagle.py：
+
+# eagle.py: SpecDecodeBaseProposer.propose()
+def propose(self, target_token_ids, target_positions,
+            target_hidden_states, next_token_ids, ...):
+    # ====== 第一次 forward: 用大模型的 hidden states 做输入 ======
+    num_tokens, token_indices_to_sample, common_attn_metadata = (
+        self.set_inputs_first_pass(
+            target_token_ids, next_token_ids,
+            target_positions, target_hidden_states, ...
+        )
+    )
+    # 构建 attention metadata
+    per_group_attn_metadata, per_layer_attn_metadata = (
+        self.build_per_group_and_layer_attn_metadata(common_attn_metadata)
+    )
+    # 构建模型输入 (input_ids, positions, hidden_states)
+    model_kwargs = self.build_model_inputs_first_pass(num_tokens, ...)
+    # draft 模型第 1 次 forward
+    with set_forward_context(per_layer_attn_metadata, ...):
+        ret_hidden_states = self.model(**model_kwargs)       # ← draft 模型 forward
+    # 采样第 1 个 draft token
+    sample_hidden_states = last_hidden_states[token_indices_to_sample]
+    draft_token_ids = self._greedy_sample(sample_hidden_states)  # ← argmax
+    # 如果只需 1 个 draft token，直接返回
+    if self.num_speculative_tokens == 1:
+        return draft_token_ids.view(-1, 1)
+    # ====== 自回归循环: 生成第 2~K 个 draft token ======
+    draft_token_ids_list = [draft_token_ids]
+    for token_index in range(self.num_speculative_tokens - 1):
+        # (a) 输入 = 上一步的 draft token
+        input_ids = draft_token_ids_list[-1].int()
+        # (b) 更新 position、slot_mapping、seq_lens (每步+1)
+        eagle_step_update_slot_mapping_and_metadata(
+            positions, block_table, seq_lens, block_size, ...
+        )
+        common_attn_metadata.max_seq_len += 1
+        # (c) 重建 attention metadata
+        _, per_layer_attn_metadata = self.build_per_group_and_layer_attn_metadata(
+            common_attn_metadata, draft_index=token_index + 1
+        )
+        # (d) 设置模型输入
+        self.input_ids[:batch_size] = input_ids
+        self.hidden_states[:batch_size] = hidden_states  # 上一步的 hidden
+        model_kwargs = {
+            "input_ids": self.input_ids[:input_batch_size],
+            "positions": self._get_positions(input_batch_size),
+            "hidden_states": self.hidden_states[:input_batch_size],  # EAGLE 特有
+        }
+        # (e) draft 模型第 2, 3, ..., K 次 forward
+        with set_forward_context(per_layer_attn_metadata, ...):
+            ret_hidden_states = self.model(**model_kwargs)          # ← draft forward
+        # (f) 采样下一个 draft token
+        draft_token_ids = self._greedy_sample(last_hidden_states[:batch_size])
+        draft_token_ids_list.append(draft_token_ids)
+    # 拼接所有 draft token: [batch_size, K]
+    return torch.stack(draft_token_ids_list, dim=1)
+时间线图
+一次完整迭代的时间线:
+时间 ─────────────────────────────────────────────────────→
+     execute_model()              sample_tokens()
+     ┌────────────────┐ ┌─────────────────────────────────────────┐
+     │                │ │                                         │
+     │  大模型 forward │ │ _sample()    propose_draft_token_ids()  │
+     │  (验证 draft   │ │ ┌────────┐  ┌──────────────────────┐    │
+     │   + 正常推理)   │ │ │验证:    │  │ draft forward #1     │    │
+     │                │ │ │rejection│  │ → greedy → token_1   │    │
+     │  1 次 forward  │ │ │sampler │  │ draft forward #2     │    │
+     │  产出所有位置   │ │ │        │  │ → greedy → token_2   │    │
+     │  的 logits     │ │ │得到     │  │ draft forward #3     │    │
+     │                │ │ │accepted │  │ → greedy → token_3   │    │
+     │  同时处理:     │ │ │tokens  │  │ ...                  │    │
+     │  · 原始 token  │ │ │+ bonus │  │ draft forward #K     │    │
+     │  · 上轮 draft  │ │ │        │  │ → greedy → token_K   │    │
+     │                │ │ └────────┘  └──────────────────────┘    │
+     │                │ │                                         │
+     │  return None   │ │ bookkeeping → return output + drafts    │
+     └────────────────┘ └─────────────────────────────────────────┘
+     │                │ │            │ │                          │
+     ├── T_large ─────┤ ├─ T_verify ─┤ ├──── K × T_draft ───────┤
+     draft 结果交给 Scheduler → 下一轮 execute_model 时作为输入验证
+关键设计要点
+问题	答案
+draft 在哪里生成？	在 sample_tokens() 中，验证完成后立即调用 propose_draft_token_ids()
+是 K 次 forward 还是 1 次？	K 次 forward（自回归循环），每次产出 1 个 draft token
+EAGLE 为什么快？	draft 模型极小（只有几层 + 轻量头），共享大模型的 embedding/lm_head，单次 forward 很快
+draft 用什么采样？	贪心 (argmax)，不用 temperature/top-p，因为 draft 只需要"猜测最可能的"即可
+下一轮怎么拿到 draft？	draft ids 存在 self._draft_token_ids，异步拷贝到 CPU → Scheduler 拿到后放入下一轮的 scheduled_spec_decode_tokens → 下一次 execute_model() 的 _prepare_inputs() 中拼入 batch
+如果没有 spec decode？	sample_tokens() 中 spec_config is None 时跳过所有 draft 逻辑，直接返回
+
+'''
+

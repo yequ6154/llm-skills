@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<!-- saved from url=(0055)file:///Users/admin/Desktop/vllm/vllm-architecture.html -->
+<html lang="zh-CN"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM Architecture — Module Call Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com/">
+<link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin="">
+<link href="./vLLM Architecture — Module Call Graph_files/css2" rel="stylesheet">
+<style>
+:root {
+  --bg: #FAF7F2; --bg-warm: #F5F0E8; --bg-code: #1E1E2E;
+  --text: #2C2A28; --text2: #6B6560; --text3: #9E9790;
+  --border: #E5DFD6; --border-light: #EEEBE5;
+  --surface: #FFFFFF; --surface-warm: #FDF9F3;
+  --accent: #2A7B9B; --accent-hover: #1F6280; --accent-light: #E4F2F7; --accent-muted: #5A9DB8;
+  --actor1: #D94F30; --actor2: #2A7B9B; --actor3: #7B6DAA; --actor4: #D4A843; --actor5: #2D8B55;
+  --success: #2D8B55; --error: #C93B3B;
+  --font-display: 'Bricolage Grotesque', Georgia, serif;
+  --font-body: 'DM Sans', -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+  --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+  --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+  --radius: 12px; --radius-sm: 8px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-body); color: var(--text); background: var(--bg); line-height: 1.6; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+/* Header */
+.header { background: var(--bg-code); color: #CDD6F4; padding: 3rem 2rem 2rem; text-align: center; }
+.header h1 { font-family: var(--font-display); font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem; }
+.header p { color: var(--text3); font-size: 1rem; max-width: 700px; margin: 0 auto; }
+
+/* Tabs */
+.tabs { display: flex; justify-content: center; gap: 0.5rem; padding: 1.5rem 1rem; background: var(--surface); border-bottom: 1px solid var(--border-light); position: sticky; top: 0; z-index: 100; backdrop-filter: blur(8px); }
+.tab { padding: 0.5rem 1.25rem; border-radius: 99px; border: 1.5px solid var(--border); background: var(--surface); font-family: var(--font-body); font-size: 0.875rem; font-weight: 600; cursor: pointer; transition: all 150ms; color: var(--text2); }
+.tab:hover { border-color: var(--accent-muted); color: var(--accent); }
+.tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Panels */
+.panel { display: none; max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+.panel.active { display: block; }
+
+/* Section titles */
+.section-title { font-family: var(--font-display); font-size: 1.5rem; font-weight: 700; margin: 2rem 0 1rem; color: var(--text); }
+.section-subtitle { font-size: 0.875rem; color: var(--text2); margin-bottom: 1.5rem; }
+
+/* Architecture Diagram (SVG-based) */
+.arch-svg-container { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-md); padding: 1.5rem; overflow-x: auto; margin-bottom: 2rem; }
+.arch-svg-container svg { width: 100%; min-width: 900px; }
+
+/* Network Graph */
+.graph-container { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-md); overflow: hidden; margin-bottom: 2rem; position: relative; }
+.graph-canvas { width: 100%; height: 600px; cursor: grab; }
+.graph-canvas:active { cursor: grabbing; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border-light); background: var(--surface-warm); }
+.legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; color: var(--text2); }
+.legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+
+/* Call Chain Cards */
+.chain-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); margin-bottom: 1.5rem; overflow: hidden; border: 1px solid var(--border-light); }
+.chain-header { padding: 1rem 1.5rem; cursor: pointer; display: flex; align-items: center; gap: 1rem; transition: background 150ms; }
+.chain-header:hover { background: var(--accent-light); }
+.chain-header .chain-icon { width: 36px; height: 36px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; color: #fff; flex-shrink: 0; font-size: 0.875rem; }
+.chain-header h3 { font-family: var(--font-display); font-size: 1.1rem; font-weight: 700; flex: 1; }
+.chain-header .chain-desc { font-size: 0.8rem; color: var(--text2); }
+.chain-header .arrow { transition: transform 200ms; font-size: 1.2rem; color: var(--text3); }
+.chain-card.open .chain-header .arrow { transform: rotate(90deg); }
+.chain-body { max-height: 0; overflow: hidden; transition: max-height 400ms ease; }
+.chain-card.open .chain-body { max-height: 3000px; }
+.chain-steps { padding: 0 1.5rem 1.5rem; }
+
+/* Call Step */
+.call-step { display: flex; gap: 1rem; position: relative; padding-left: 1.5rem; padding-bottom: 1rem; }
+.call-step::before { content: ''; position: absolute; left: 5px; top: 28px; bottom: 0; width: 2px; background: var(--border); }
+.call-step:last-child::before { display: none; }
+.call-step .step-dot { position: absolute; left: 0; top: 8px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--accent); background: var(--surface); z-index: 1; }
+.call-step .step-content { flex: 1; }
+.call-step .step-fn { font-family: var(--font-mono); font-size: 0.8rem; color: var(--accent); font-weight: 600; margin-bottom: 0.25rem; word-break: break-all; }
+.call-step .step-file { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text3); margin-bottom: 0.25rem; }
+.call-step .step-desc { font-size: 0.8rem; color: var(--text2); }
+.call-step .step-arrow { font-size: 0.7rem; color: var(--accent-muted); padding: 0.1rem 0.4rem; background: var(--accent-light); border-radius: 4px; font-family: var(--font-mono); display: inline-block; margin-bottom: 0.25rem; }
+
+/* Module Dependency Table */
+.dep-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.dep-table th { background: var(--bg-code); color: #CDD6F4; padding: 0.75rem 1rem; text-align: left; font-family: var(--font-mono); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; position: sticky; top: 0; }
+.dep-table td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-light); vertical-align: top; }
+.dep-table tr:hover td { background: var(--accent-light); }
+.dep-table .mod-name { font-family: var(--font-mono); font-weight: 600; color: var(--accent); white-space: nowrap; }
+.dep-table .mod-deps { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text2); line-height: 1.8; }
+.dep-tag { display: inline-block; padding: 0.1rem 0.5rem; background: var(--bg-warm); border-radius: 4px; margin: 0.1rem 0.2rem; border: 1px solid var(--border-light); font-size: 0.7rem; }
+.dep-tag:hover { background: var(--accent-light); border-color: var(--accent-muted); }
+
+/* Code block */
+.code-block { background: var(--bg-code); color: #CDD6F4; border-radius: var(--radius-sm); padding: 1rem 1.25rem; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.7; margin: 1rem 0; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+.code-block .ck { color: #CBA6F7; }
+.code-block .cf { color: #89B4FA; }
+.code-block .cs { color: #A6E3A1; }
+.code-block .cc { color: #6C7086; }
+.code-block .cp { color: #F9E2AF; }
+.code-block .cn { color: #FAB387; }
+.code-block .co { color: #94E2D5; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .header h1 { font-size: 1.75rem; }
+  .tabs { flex-wrap: wrap; }
+  .graph-canvas { height: 400px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>vLLM Architecture Map</h1>
+  <p>模块调用关系网络图 &amp; 函数调用链 — 交互式探索 vLLM 内部结构</p>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="showPanel(&#39;overview&#39;)">架构总览</button>
+  <button class="tab" onclick="showPanel(&#39;chains&#39;)">函数调用链</button>
+  <button class="tab" onclick="showPanel(&#39;deps&#39;)">模块依赖表</button>
+  <button class="tab" onclick="showPanel(&#39;network&#39;)">网络关系图</button>
+</div>
+
+<!-- ==================== PANEL 1: OVERVIEW ==================== -->
+<div class="panel active" id="panel-overview">
+  <h2 class="section-title">vLLM V1 架构分层图</h2>
+  <p class="section-subtitle">从用户请求到 GPU 执行的完整路径。点击任意模块查看详情。</p>
+
+  <div class="arch-svg-container">
+    <svg viewBox="0 0 960 720" xmlns="http://www.w3.org/2000/svg" id="arch-svg">
+      <!-- Layer backgrounds -->
+      <rect x="20" y="10" width="920" height="100" rx="12" fill="#FDEEE9" stroke="#E8836C" stroke-width="1.5" stroke-dasharray="6 3"></rect>
+      <text x="40" y="35" font-family="JetBrains Mono" font-size="11" fill="#D94F30" font-weight="600" letter-spacing="0.05em">USER LAYER — 用户接入层</text>
+
+      <rect x="20" y="130" width="920" height="120" rx="12" fill="#E4F2F7" stroke="#5A9DB8" stroke-width="1.5" stroke-dasharray="6 3"></rect>
+      <text x="40" y="155" font-family="JetBrains Mono" font-size="11" fill="#2A7B9B" font-weight="600" letter-spacing="0.05em">ENGINE LAYER — 引擎层</text>
+
+      <rect x="20" y="270" width="920" height="120" rx="12" fill="#F3EFF8" stroke="#7B6DAA" stroke-width="1.5" stroke-dasharray="6 3"></rect>
+      <text x="40" y="295" font-family="JetBrains Mono" font-size="11" fill="#7B6DAA" font-weight="600" letter-spacing="0.05em">CORE LAYER — 核心调度层</text>
+
+      <rect x="20" y="410" width="920" height="130" rx="12" fill="#FDF5E0" stroke="#E0C070" stroke-width="1.5" stroke-dasharray="6 3"></rect>
+      <text x="40" y="435" font-family="JetBrains Mono" font-size="11" fill="#D4A843" font-weight="600" letter-spacing="0.05em">EXECUTION LAYER — 执行层</text>
+
+      <rect x="20" y="560" width="920" height="140" rx="12" fill="#E8F5EE" stroke="#5AAD7A" stroke-width="1.5" stroke-dasharray="6 3"></rect>
+      <text x="40" y="585" font-family="JetBrains Mono" font-size="11" fill="#2D8B55" font-weight="600" letter-spacing="0.05em">MODEL LAYER — 模型计算层</text>
+
+      <!-- USER LAYER modules -->
+      <g class="node" onclick="showNodeInfo(this)" data-info="LLM 类 — 离线推理入口
+文件: vllm/entrypoints/llm.py
+
+主要方法:
+• generate() — 生成文本
+• chat() — 对话接口
+• encode() — 编码/嵌入
+
+调用: LLMEngine.add_request(), LLMEngine.step()">
+        <rect x="60" y="50" width="160" height="48" rx="8" fill="#D94F30" cursor="pointer" style="stroke-width: 0; stroke: rgb(255, 255, 255);"></rect>
+        <text x="140" y="72" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">LLM</text>
+        <text x="140" y="88" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">entrypoints/llm.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="OpenAI 兼容 API 服务器
+文件: vllm/entrypoints/openai/api_server.py
+
+提供 REST API:
+• POST /v1/chat/completions
+• POST /v1/completions
+• POST /v1/embeddings
+• GET /v1/models
+
+调用: AsyncLLM.generate()">
+        <rect x="260" y="50" width="200" height="48" rx="8" fill="#D94F30" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="360" y="72" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">OpenAI API Server</text>
+        <text x="360" y="88" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">entrypoints/openai/</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="CLI 命令行工具
+文件: vllm/entrypoints/cli/main.py
+
+子命令:
+• vllm serve — 启动服务器
+• vllm benchmark — 性能测试
+• vllm collect_env — 环境信息
+
+调用: run_server() → api_server.py">
+        <rect x="500" y="50" width="140" height="48" rx="8" fill="#D94F30" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="570" y="72" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">CLI</text>
+        <text x="570" y="88" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">entrypoints/cli/</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="输入预处理器
+文件: vllm/inputs/preprocess.py
+
+• 文本 tokenization
+• 多模态数据处理
+• 构建 EngineCoreRequest
+
+调用: MultiModalProcessor, Tokenizer">
+        <rect x="680" y="50" width="160" height="48" rx="8" fill="#E8836C" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="760" y="72" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">InputProcessor</text>
+        <text x="760" y="88" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">inputs/preprocess.py</text>
+      </g>
+
+      <!-- ENGINE LAYER -->
+      <g class="node" onclick="showNodeInfo(this)" data-info="同步 LLM 引擎
+文件: vllm/v1/engine/llm_engine.py
+
+编排 InputProcessor + OutputProcessor + EngineCoreClient
+
+主要方法:
+• add_request() — 添加请求
+• step() — 执行一步
+• has_unfinished_requests()
+
+被 LLM 类调用">
+        <rect x="60" y="170" width="180" height="48" rx="8" fill="#2A7B9B" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="150" y="192" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">LLMEngine</text>
+        <text x="150" y="208" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/engine/llm_engine.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="异步 LLM 引擎
+文件: vllm/v1/engine/async_llm.py
+
+用于 HTTP 服务器的异步引擎
+
+• generate() — 异步生成 (AsyncGenerator)
+• _run_output_handler() — 后台输出处理
+
+通过 ZMQ/多进程与 EngineCore 通信">
+        <rect x="280" y="170" width="180" height="48" rx="8" fill="#2A7B9B" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="370" y="192" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">AsyncLLM</text>
+        <text x="370" y="208" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/engine/async_llm.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="引擎核心 — vLLM 的心脏
+文件: vllm/v1/engine/core.py
+
+核心循环 step():
+1. scheduler.schedule()
+2. executor.execute_model()
+3. scheduler.get_grammar_bitmask()
+4. scheduler.update_from_output()
+
+拥有: Scheduler, Executor">
+        <rect x="500" y="170" width="200" height="48" rx="8" fill="#1F6280" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="600" y="192" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="700">EngineCore ⭐</text>
+        <text x="600" y="208" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/engine/core.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="引擎核心客户端
+文件: vllm/v1/engine/core_client.py
+
+传输层抽象:
+• InprocClient — 进程内直接调用
+• SyncMPClient — 同步多进程 (ZMQ)
+• AsyncMPClient — 异步多进程 (ZMQ)
+
+解耦 Engine 与 Core 的通信方式">
+        <rect x="740" y="170" width="180" height="48" rx="8" fill="#5A9DB8" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="830" y="192" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">CoreClient</text>
+        <text x="830" y="208" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/engine/core_client.py</text>
+      </g>
+
+      <!-- CORE LAYER -->
+      <g class="node" onclick="showNodeInfo(this)" data-info="调度器
+文件: vllm/v1/core/sched/scheduler.py
+
+核心方法:
+• schedule() → SchedulerOutput
+• update_from_output() — 处理结果
+• update_draft_token_ids() — 推测解码
+
+无 prefill/decode 区分
+统一的 token 追赶算法
+
+拥有: KVCacheManager">
+        <rect x="60" y="310" width="200" height="48" rx="8" fill="#7B6DAA" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="160" y="332" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="700">Scheduler ⭐</text>
+        <text x="160" y="348" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/core/sched/scheduler.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="KV 缓存管理器
+文件: vllm/v1/core/kv_cache_manager.py
+
+• allocate_slots() — 为请求分配内存块
+• get_computed_blocks() — 前缀缓存查找
+• free() — 释放请求的块
+
+通过 KVCacheCoordinator 管理多个缓存组
+
+调用: BlockPool">
+        <rect x="300" y="310" width="200" height="48" rx="8" fill="#7B6DAA" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="400" y="332" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">KVCacheManager</text>
+        <text x="400" y="348" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/core/kv_cache_manager.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="内存块池
+文件: vllm/v1/core/block_pool.py
+
+管理所有 KVCacheBlock:
+• free_block_queue — 空闲块队列
+• cached_block_hash_to_block — 前缀缓存映射
+• get_new_blocks() — 分配新块
+• free_blocks() — 回收块
+
+支持 LRU 逐出策略">
+        <rect x="540" y="310" width="160" height="48" rx="8" fill="#9B8DC4" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="620" y="332" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">BlockPool</text>
+        <text x="620" y="348" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/core/block_pool.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="结构化输出
+文件: vllm/v1/structured_output/
+
+语法约束解码:
+• JSON schema 强制
+• 正则表达式匹配
+• Grammar 引导生成
+
+通过 grammar bitmask 约束采样">
+        <rect x="740" y="310" width="180" height="48" rx="8" fill="#9B8DC4" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="830" y="332" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">StructuredOutput</text>
+        <text x="830" y="348" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/structured_output/</text>
+      </g>
+
+      <!-- EXECUTION LAYER -->
+      <g class="node" onclick="showNodeInfo(this)" data-info="执行器 (抽象基类)
+文件: vllm/v1/executor/abstract.py
+
+实现:
+• UniProcExecutor — 单进程
+• MultiprocExecutor — 多进程 (TP)
+• RayDistributedExecutor — Ray 分布式
+
+通过 collective_rpc 调度 Worker 方法">
+        <rect x="60" y="460" width="180" height="48" rx="8" fill="#D4A843" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="150" y="482" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">Executor</text>
+        <text x="150" y="498" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/executor/abstract.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="GPU Worker
+文件: vllm/v1/worker/gpu_worker.py
+
+每个 GPU 一个 Worker:
+• init_device() — 初始化 GPU
+• load_model() — 加载模型
+• execute_model() — 执行前向传播
+• sample_tokens() — 采样
+
+拥有: GPUModelRunner">
+        <rect x="280" y="460" width="180" height="48" rx="8" fill="#D4A843" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="370" y="482" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">Worker</text>
+        <text x="370" y="498" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/worker/gpu_worker.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="GPU 模型运行器
+文件: vllm/v1/worker/gpu_model_runner.py
+
+核心执行逻辑:
+• execute_model() — 准备输入 → 前向 → 逻辑值
+• _model_forward() — 调用 model(input_ids, ...)
+• _sample() — 采样或拒绝采样
+• propose_draft_token_ids() — 推测解码
+
+管理: InputBatch, BlockTables, Drafter">
+        <rect x="500" y="460" width="220" height="48" rx="8" fill="#BF9530" cursor="pointer" style="stroke-width: 3; stroke: rgb(255, 255, 255);"></rect>
+        <text x="610" y="482" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="700">GPUModelRunner ⭐</text>
+        <text x="610" y="498" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/worker/gpu_model_runner.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="推测解码模块
+文件: vllm/v1/spec_decode/
+
+Proposers:
+• NgramProposer — N-gram 统计
+• EagleProposer — EAGLE 隐状态
+• MedusaProposer — 多头预测
+• DraftModelProposer — 独立小模型
+• SuffixDecodingProposer — 后缀缓存
+
++ RejectionSampler 验证">
+        <rect x="760" y="460" width="160" height="48" rx="8" fill="#E0C070" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="840" y="482" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">SpecDecode</text>
+        <text x="840" y="498" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/spec_decode/</text>
+      </g>
+
+      <!-- MODEL LAYER -->
+      <g class="node" onclick="showNodeInfo(this)" data-info="模型实现
+文件: vllm/model_executor/models/
+
+100+ 模型架构:
+• LlamaForCausalLM
+• Qwen2ForCausalLM
+• MistralForCausalLM
+• LlavaForConditionalGeneration
+• WhisperForConditionalGeneration
+• ...
+
+通过 ModelRegistry 注册">
+        <rect x="60" y="600" width="200" height="48" rx="8" fill="#2D8B55" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="160" y="622" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">Models (100+)</text>
+        <text x="160" y="638" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">model_executor/models/</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="注意力后端
+文件: vllm/v1/attention/backends/
+
+后端实现:
+• FlashAttention
+• FlashInfer
+• Triton
+• ROCm
+• PagedAttention
+
+所有后端共享 paged KV 布局">
+        <rect x="300" y="600" width="180" height="48" rx="8" fill="#2D8B55" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="390" y="622" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">Attention</text>
+        <text x="390" y="638" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/attention/backends/</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="采样器
+文件: vllm/v1/sample/sampler.py
+
+• 温度缩放
+• Top-K / Top-P 过滤
+• 重复惩罚
+• Min-P 采样
+• Gumbel 采样
+
++ RejectionSampler (推测解码验证)">
+        <rect x="520" y="600" width="160" height="48" rx="8" fill="#2D8B55" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="600" y="622" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">Sampler</text>
+        <text x="600" y="638" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">v1/sample/sampler.py</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="多模态处理
+文件: vllm/multimodal/
+
+• MultiModalRegistry — 注册表
+• BaseMultiModalProcessor — 预处理器
+• MediaConnector — 媒体获取
+• PlaceholderRange — 占位符管理
+
+支持: 图片, 音频, 视频">
+        <rect x="720" y="600" width="180" height="48" rx="8" fill="#5AAD7A" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="810" y="622" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="12" font-weight="600">Multimodal</text>
+        <text x="810" y="638" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="DM Sans" font-size="9">multimodal/</text>
+      </g>
+
+      <!-- Config (side) -->
+      <g class="node" onclick="showNodeInfo(this)" data-info="配置系统
+文件: vllm/config/
+
+VllmConfig 聚合所有子配置:
+• ModelConfig
+• CacheConfig
+• SchedulerConfig
+• ParallelConfig
+• SpeculativeConfig
+• MultiModalConfig
+• CompilationConfig
+• ...
+
+所有组件都依赖配置">
+        <rect x="60" y="670" width="140" height="28" rx="6" fill="#9E9790" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="130" y="689" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="10" font-weight="600">VllmConfig</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="分布式通信
+文件: vllm/distributed/
+
+• parallel_state — TP/PP/DP 进程组
+• device_communicators — GPU 通信
+• kv_transfer — KV 缓存迁移
+• custom_all_reduce — 自定义归约
+
+支持: NCCL, Gloo, Ray">
+        <rect x="220" y="670" width="160" height="28" rx="6" fill="#9E9790" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="300" y="689" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="10" font-weight="600">Distributed</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="平台适配
+文件: vllm/platforms/
+
+硬件后端:
+• CUDA (NVIDIA)
+• ROCm (AMD)
+• CPU (x86/ARM)
+• TPU (Google)
+• XPU (Intel)
+
+通过插件系统可扩展">
+        <rect x="400" y="670" width="130" height="28" rx="6" fill="#9E9790" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="465" y="689" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="10" font-weight="600">Platforms</text>
+      </g>
+
+      <g class="node" onclick="showNodeInfo(this)" data-info="Tokenizer
+文件: vllm/tokenizers/
+
+• HuggingFace AutoTokenizer
+• MistralTokenizer
+• 支持快速/慢速模式
+
+被 InputProcessor 和 OutputProcessor 使用">
+        <rect x="550" y="670" width="130" height="28" rx="6" fill="#9E9790" cursor="pointer" style="stroke-width: 0;"></rect>
+        <text x="615" y="689" text-anchor="middle" fill="#fff" font-family="JetBrains Mono" font-size="10" font-weight="600">Tokenizers</text>
+      </g>
+
+      <!-- ARROWS (call relationships) -->
+      <defs>
+        <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" fill="#9E9790">
+          <polygon points="0 0, 8 3, 0 6"></polygon>
+        </marker>
+        <marker id="arrowhead-accent" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" fill="#2A7B9B">
+          <polygon points="0 0, 8 3, 0 6"></polygon>
+        </marker>
+      </defs>
+
+      <!-- User → Engine -->
+      <line x1="140" y1="98" x2="150" y2="170" stroke="#9E9790" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+      <line x1="360" y1="98" x2="370" y2="170" stroke="#9E9790" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+
+      <!-- Engine → Core -->
+      <line x1="600" y1="218" x2="160" y2="310" stroke="#2A7B9B" stroke-width="2" marker-end="url(#arrowhead-accent)"></line>
+      <line x1="600" y1="218" x2="150" y2="460" stroke="#2A7B9B" stroke-width="2" marker-end="url(#arrowhead-accent)" stroke-dasharray="6 3"></line>
+
+      <!-- EngineCore calls -->
+      <text x="340" y="265" font-family="JetBrains Mono" font-size="9" fill="#2A7B9B" font-weight="600">schedule()</text>
+      <text x="530" y="265" font-family="JetBrains Mono" font-size="9" fill="#2A7B9B" font-weight="600">execute_model()</text>
+
+      <!-- Scheduler → KVCache -->
+      <line x1="260" y1="334" x2="300" y2="334" stroke="#7B6DAA" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+      <line x1="500" y1="334" x2="540" y2="334" stroke="#7B6DAA" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+
+      <!-- Executor → Worker → Runner -->
+      <line x1="240" y1="484" x2="280" y2="484" stroke="#D4A843" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+      <line x1="460" y1="484" x2="500" y2="484" stroke="#D4A843" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+      <line x1="720" y1="484" x2="760" y2="484" stroke="#D4A843" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+
+      <!-- Runner → Model layer -->
+      <line x1="560" y1="508" x2="160" y2="600" stroke="#2D8B55" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+      <line x1="610" y1="508" x2="390" y2="600" stroke="#2D8B55" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+      <line x1="640" y1="508" x2="600" y2="600" stroke="#2D8B55" stroke-width="1.5" marker-end="url(#arrowhead)"></line>
+
+    </svg>
+  </div>
+
+  <!-- Node info display -->
+  <div id="node-info" style="background: var(--bg-code); color: rgb(205, 214, 244); border-radius: var(--radius); padding: 1.5rem; font-family: var(--font-mono); font-size: 0.85rem; white-space: pre-wrap; line-height: 1.7; display: block; margin-top: 1rem; box-shadow: var(--shadow-md);">GPU 模型运行器
+文件: vllm/v1/worker/gpu_model_runner.py
+
+核心执行逻辑:
+• execute_model() — 准备输入 → 前向 → 逻辑值
+• _model_forward() — 调用 model(input_ids, ...)
+• _sample() — 采样或拒绝采样
+• propose_draft_token_ids() — 推测解码
+
+管理: InputBatch, BlockTables, Drafter</div>
+</div>
+
+<!-- ==================== PANEL 2: CALL CHAINS ==================== -->
+<div class="panel" id="panel-chains">
+  <h2 class="section-title">核心函数调用链</h2>
+  <p class="section-subtitle">5 条关键路径 — 从用户请求到 GPU 执行的完整函数调用栈。点击展开查看详情。</p>
+
+  <!-- Chain A -->
+  <div class="chain-card open" onclick="this.classList.toggle(&#39;open&#39;)">
+    <div class="chain-header">
+      <div class="chain-icon" style="background: var(--actor1)">A</div>
+      <div style="flex:1">
+        <h3>离线推理路径 — LLM.generate()</h3>
+        <div class="chain-desc">从 Python API 调用到 token 生成的完整链路</div>
+      </div>
+      <span class="arrow">▸</span>
+    </div>
+    <div class="chain-body"><div class="chain-steps">
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">LLM.generate(prompts, sampling_params)</div>
+        <div class="step-file">vllm/entrypoints/llm.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">用户入口。验证参数，添加请求，启动引擎循环。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">LLMEngine.add_request(request_id, prompt, params)</div>
+        <div class="step-file">vllm/v1/engine/llm_engine.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">InputProcessor 构建 EngineCoreRequest，注册到 OutputProcessor。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">InprocClient.add_request(request) → EngineCore.add_request()</div>
+        <div class="step-file">vllm/v1/engine/core_client.py → core.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">请求进入调度器的等待队列。前缀缓存哈希计算。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">LLMEngine.step() → InprocClient.get_output()</div>
+        <div class="step-file">vllm/v1/engine/llm_engine.py → core_client.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">循环执行直到所有请求完成。每次调用 EngineCore.step()。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">EngineCore.step() → scheduler.schedule()</div>
+        <div class="step-file">vllm/v1/engine/core.py → v1/core/sched/scheduler.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">调度器决定哪些请求获得 GPU 时间，分配 KV cache 块。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">executor.execute_model(scheduler_output)</div>
+        <div class="step-file">vllm/v1/executor/abstract.py → Worker.execute_model()</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">通过 collective_rpc 调度 Worker，Worker 调用 GPUModelRunner。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">GPUModelRunner.execute_model() → _model_forward() → model(input_ids, positions, ...)</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py → model_executor/models/*.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">准备输入 → 构建注意力元数据 → 执行模型前向传播 → 计算 logits。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">GPUModelRunner._sample(logits) → Sampler(logits, sampling_metadata)</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py → v1/sample/sampler.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">温度缩放 → Top-K/Top-P → 惩罚 → Gumbel 采样 → 新 token。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">scheduler.update_from_output(scheduler_output, model_output)</div>
+        <div class="step-file">vllm/v1/core/sched/scheduler.py</div>
+        <div class="step-arrow">returns →</div>
+        <div class="step-desc">更新请求状态，追加生成的 token，检查停止条件，构建 EngineCoreOutputs。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">OutputProcessor.process_outputs() → RequestOutput</div>
+        <div class="step-file">vllm/v1/engine/output_processor.py</div>
+        <div class="step-desc">反 tokenize，构建最终的 RequestOutput 返回给用户。</div>
+      </div></div>
+    </div></div>
+  </div>
+
+  <!-- Chain B -->
+  <div class="chain-card" onclick="this.classList.toggle(&#39;open&#39;)">
+    <div class="chain-header">
+      <div class="chain-icon" style="background: var(--actor2)">B</div>
+      <div style="flex:1">
+        <h3>在线服务路径 — HTTP → AsyncLLM</h3>
+        <div class="chain-desc">从 HTTP 请求到流式响应的异步路径</div>
+      </div>
+      <span class="arrow">▸</span>
+    </div>
+    <div class="chain-body"><div class="chain-steps">
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">POST /v1/chat/completions → create_chat_completion(request)</div>
+        <div class="step-file">vllm/entrypoints/openai/chat_completion/api_router.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">FastAPI 路由接收 HTTP 请求。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">OpenAIServingChat.create_chat_completion(request)</div>
+        <div class="step-file">vllm/entrypoints/openai/chat_completion/serving.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">解析聊天消息，应用模板，构建 TokensPrompt + SamplingParams。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">engine_client.generate(prompt, params, request_id) — AsyncLLM</div>
+        <div class="step-file">vllm/v1/engine/async_llm.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">异步生成器。add_request → 通过 ZMQ 发送到 EngineCore 子进程。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">EngineCoreProc.run_busy_loop() → step_fn()</div>
+        <div class="step-file">vllm/v1/engine/core.py (子进程)</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">独立进程中运行 EngineCore.step()，结果通过 ZMQ 返回。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">AsyncLLM._run_output_handler() → get_output_async()</div>
+        <div class="step-file">vllm/v1/engine/async_llm.py</div>
+        <div class="step-arrow">yields →</div>
+        <div class="step-desc">后台协程接收输出，填充每个请求的队列。generate() yield RequestOutput。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">StreamingResponse(content=generator, media_type="text/event-stream")</div>
+        <div class="step-file">vllm/entrypoints/openai/chat_completion/api_router.py</div>
+        <div class="step-desc">SSE 流式推送 data: {json}\n\n 格式。最终发送 data: [DONE]。</div>
+      </div></div>
+    </div></div>
+  </div>
+
+  <!-- Chain C -->
+  <div class="chain-card" onclick="this.classList.toggle(&#39;open&#39;)">
+    <div class="chain-header">
+      <div class="chain-icon" style="background: var(--actor3)">C</div>
+      <div style="flex:1">
+        <h3>引擎核心循环 — EngineCore.step()</h3>
+        <div class="chain-desc">vLLM 的心跳 — 每个 token 都来自这个循环的一次迭代</div>
+      </div>
+      <span class="arrow">▸</span>
+    </div>
+    <div class="chain-body"><div class="chain-steps">
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">scheduler.has_requests() → 检查是否有待处理请求</div>
+        <div class="step-file">vllm/v1/core/sched/scheduler.py</div>
+        <div class="step-arrow">if True →</div>
+        <div class="step-desc">如果无请求，直接返回空结果。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">scheduler_output = scheduler.schedule()</div>
+        <div class="step-file">vllm/v1/core/sched/scheduler.py</div>
+        <div class="step-arrow">→ SchedulerOutput</div>
+        <div class="step-desc">遍历 running 队列 → 分配 token budget → KVCacheManager.allocate_slots() → 构建批次。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">future = executor.execute_model(scheduler_output, non_block=True)</div>
+        <div class="step-file">vllm/v1/executor/abstract.py</div>
+        <div class="step-arrow">async →</div>
+        <div class="step-desc">异步提交给 GPU Worker 执行。非阻塞返回 Future。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">grammar_output = scheduler.get_grammar_bitmask(scheduler_output)</div>
+        <div class="step-file">vllm/v1/core/sched/scheduler.py</div>
+        <div class="step-arrow">parallel →</div>
+        <div class="step-desc">与 GPU 执行并行计算结构化输出约束的 bitmask。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">model_output = future.result()</div>
+        <div class="step-file">vllm/v1/engine/core.py</div>
+        <div class="step-arrow">→ ModelRunnerOutput</div>
+        <div class="step-desc">等待 GPU 完成。如果 model_output 为 None，调用 sample_tokens()。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">engine_core_outputs = scheduler.update_from_output(scheduler_output, model_output)</div>
+        <div class="step-file">vllm/v1/core/sched/scheduler.py</div>
+        <div class="step-desc">追加 sampled tokens → 检查停止条件 → 处理推测解码拒绝 → 释放完成请求的块 → 返回 EngineCoreOutputs。</div>
+      </div></div>
+    </div></div>
+  </div>
+
+  <!-- Chain D -->
+  <div class="chain-card" onclick="this.classList.toggle(&#39;open&#39;)">
+    <div class="chain-header">
+      <div class="chain-icon" style="background: var(--actor4)">D</div>
+      <div style="flex:1">
+        <h3>模型前向传播 — GPU 上发生的事</h3>
+        <div class="chain-desc">从 SchedulerOutput 到 sampled token 的 GPU 执行路径</div>
+      </div>
+      <span class="arrow">▸</span>
+    </div>
+    <div class="chain-body"><div class="chain-steps">
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">Worker.execute_model(scheduler_output)</div>
+        <div class="step-file">vllm/v1/worker/gpu_worker.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">每个 GPU 上的 Worker 接收调度输出，委托给 ModelRunner。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">GPUModelRunner._update_states(scheduler_output)</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">更新 InputBatch：添加新请求，更新 block tables，设置 slot mappings。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">GPUModelRunner._prepare_inputs() → input_ids, positions, attn_metadata</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">从 InputBatch 提取当前步的 input_ids 和位置编码，构建注意力元数据。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">GPUModelRunner._model_forward(input_ids, positions, attn_metadata, ...)</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">设置 forward_context → 调用 self.model(input_ids, positions, ...) → 可能使用 CUDA Graph。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">model(input_ids, positions, ...) — e.g. LlamaForCausalLM.forward()</div>
+        <div class="step-file">vllm/model_executor/models/llama.py (或其他模型)</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">Embedding → N × (Attention + MLP) → 最终 hidden states。注意力使用 PagedAttention / FlashAttention。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">model.compute_logits(hidden_states) → logits</div>
+        <div class="step-file">vllm/model_executor/models/*.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">最后一层 hidden states → lm_head 线性层 → vocabulary 大小的 logits 向量。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">GPUModelRunner._sample(logits, spec_decode_metadata)</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">普通采样 → Sampler()；推测解码 → RejectionSampler()。输出 SamplerOutput。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">propose_draft_token_ids(sampled_token_ids) [if spec decode]</div>
+        <div class="step-file">vllm/v1/worker/gpu_model_runner.py</div>
+        <div class="step-desc">如果启用推测解码，在采样后立即让 Drafter 生成下一步的候选 token。</div>
+      </div></div>
+    </div></div>
+  </div>
+
+  <!-- Chain E -->
+  <div class="chain-card" onclick="this.classList.toggle(&#39;open&#39;)">
+    <div class="chain-header">
+      <div class="chain-icon" style="background: var(--actor5)">E</div>
+      <div style="flex:1">
+        <h3>KV Cache 管理路径</h3>
+        <div class="chain-desc">从调度器请求块到 GPU 块表的内存管理链</div>
+      </div>
+      <span class="arrow">▸</span>
+    </div>
+    <div class="chain-body"><div class="chain-steps">
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">Scheduler.schedule() → 遍历 running 请求</div>
+        <div class="step-file">vllm/v1/core/sched/scheduler.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">对每个请求计算需要多少新 token，然后请求 KV cache 块。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">KVCacheManager.allocate_slots(request, num_new_tokens)</div>
+        <div class="step-file">vllm/v1/core/kv_cache_manager.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">计算需要多少新块，查找前缀缓存命中，委托给 Coordinator。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">KVCacheCoordinator.allocate_new_blocks(num_blocks)</div>
+        <div class="step-file">vllm/v1/core/kv_cache_coordinator.py</div>
+        <div class="step-arrow">calls →</div>
+        <div class="step-desc">协调多个 KV cache 组，委托给 SingleTypeKVCacheManager。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">BlockPool.get_new_blocks(num_blocks) → list[KVCacheBlock]</div>
+        <div class="step-file">vllm/v1/core/block_pool.py</div>
+        <div class="step-arrow">returns →</div>
+        <div class="step-desc">从 free_block_queue 分配。如果不够，触发 LRU 逐出。返回物理块 ID。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">SchedulerOutput 携带 block_ids → GPUModelRunner._update_states()</div>
+        <div class="step-file">vllm/v1/core/sched/output.py → gpu_model_runner.py</div>
+        <div class="step-arrow">data flow →</div>
+        <div class="step-desc">新请求的 block_ids 存入 CachedRequestState，更新 GPU 端 BlockTables。</div>
+      </div></div>
+      <div class="call-step"><div class="step-dot"></div><div class="step-content">
+        <div class="step-fn">BlockTables.update(block_ids) → GPU tensor</div>
+        <div class="step-file">vllm/v1/worker/gpu/block_table.py</div>
+        <div class="step-arrow">→ Attention</div>
+        <div class="step-desc">slot = block_number × page_size + offset。注意力内核使用 block tables 读写 paged KV cache。</div>
+      </div></div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ==================== PANEL 3: DEPENDENCIES ==================== -->
+<div class="panel" id="panel-deps">
+  <h2 class="section-title">模块依赖矩阵</h2>
+  <p class="section-subtitle">每个模块导入（依赖）了哪些其他 vllm 模块。悬停查看高亮。</p>
+
+  <div style="overflow-x: auto; border-radius: var(--radius); box-shadow: var(--shadow-md);">
+  <table class="dep-table">
+    <thead>
+      <tr><th style="width:200px">模块</th><th>依赖的 vllm 模块</th></tr>
+    </thead>
+    <tbody>
+      <tr><td class="mod-name">entrypoints/llm.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">engine.arg_utils</span><span class="dep-tag">inputs</span><span class="dep-tag">outputs</span><span class="dep-tag">sampling_params</span><span class="dep-tag">tokenizers</span><span class="dep-tag">lora</span><span class="dep-tag">v1.engine.llm_engine</span><span class="dep-tag">v1.sample.logits_processor</span><span class="dep-tag">platforms</span></td></tr>
+      <tr><td class="mod-name">entrypoints/openai/</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">engine.protocol</span><span class="dep-tag">entrypoints.chat_utils</span><span class="dep-tag">inputs</span><span class="dep-tag">outputs</span><span class="dep-tag">sampling_params</span><span class="dep-tag">tokenizers</span><span class="dep-tag">multimodal</span><span class="dep-tag">v1.engine.async_llm</span><span class="dep-tag">lora</span></td></tr>
+      <tr><td class="mod-name">v1/engine/core.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.core.sched.scheduler</span><span class="dep-tag">v1.executor</span><span class="dep-tag">v1.spec_decode</span><span class="dep-tag">distributed</span><span class="dep-tag">v1.worker.worker_base</span><span class="dep-tag">v1.metrics</span><span class="dep-tag">plugins</span></td></tr>
+      <tr><td class="mod-name">v1/engine/llm_engine.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.engine.core_client</span><span class="dep-tag">v1.engine.input_processor</span><span class="dep-tag">v1.engine.output_processor</span><span class="dep-tag">inputs</span><span class="dep-tag">outputs</span><span class="dep-tag">sampling_params</span><span class="dep-tag">tokenizers</span><span class="dep-tag">v1.metrics</span></td></tr>
+      <tr><td class="mod-name">v1/engine/async_llm.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.engine.core_client</span><span class="dep-tag">v1.engine.input_processor</span><span class="dep-tag">v1.engine.output_processor</span><span class="dep-tag">engine.protocol</span><span class="dep-tag">inputs</span><span class="dep-tag">outputs</span><span class="dep-tag">sampling_params</span></td></tr>
+      <tr><td class="mod-name">v1/core/sched/scheduler.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.core.kv_cache_manager</span><span class="dep-tag">v1.request</span><span class="dep-tag">v1.outputs</span><span class="dep-tag">v1.metrics.stats</span><span class="dep-tag">v1.spec_decode.metrics</span><span class="dep-tag">v1.structured_output</span><span class="dep-tag">distributed.kv_events</span><span class="dep-tag">multimodal</span></td></tr>
+      <tr><td class="mod-name">v1/core/kv_cache_manager.py</td><td class="mod-deps"><span class="dep-tag">v1.core.kv_cache_coordinator</span><span class="dep-tag">v1.core.kv_cache_utils</span><span class="dep-tag">v1.core.block_pool</span><span class="dep-tag">v1.kv_cache_interface</span><span class="dep-tag">v1.request</span><span class="dep-tag">distributed.kv_events</span></td></tr>
+      <tr><td class="mod-name">v1/worker/gpu_worker.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.worker.gpu_model_runner</span><span class="dep-tag">v1.worker.worker_base</span><span class="dep-tag">distributed</span><span class="dep-tag">platforms</span><span class="dep-tag">v1.outputs</span><span class="dep-tag">v1.core.sched.output</span></td></tr>
+      <tr><td class="mod-name">v1/worker/gpu_model_runner.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">model_executor.models</span><span class="dep-tag">model_executor.model_loader</span><span class="dep-tag">v1.attention</span><span class="dep-tag">v1.sample.sampler</span><span class="dep-tag">v1.sample.rejection_sampler</span><span class="dep-tag">v1.spec_decode.*</span><span class="dep-tag">v1.worker.gpu.block_table</span><span class="dep-tag">v1.worker.gpu_input_batch</span><span class="dep-tag">distributed</span><span class="dep-tag">forward_context</span><span class="dep-tag">lora</span><span class="dep-tag">multimodal</span><span class="dep-tag">compilation</span></td></tr>
+      <tr><td class="mod-name">v1/executor/abstract.py</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.worker.worker_base</span><span class="dep-tag">v1.core.sched.output</span><span class="dep-tag">v1.outputs</span><span class="dep-tag">distributed</span></td></tr>
+      <tr><td class="mod-name">v1/attention/</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">v1.kv_cache_interface</span><span class="dep-tag">model_executor.layers.attention</span><span class="dep-tag">platforms</span><span class="dep-tag">distributed.kv_transfer</span></td></tr>
+      <tr><td class="mod-name">v1/spec_decode/</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">model_executor.model_loader</span><span class="dep-tag">model_executor.models</span><span class="dep-tag">v1.attention</span><span class="dep-tag">v1.sample.metadata</span><span class="dep-tag">v1.worker.gpu_input_batch</span><span class="dep-tag">forward_context</span><span class="dep-tag">multimodal</span></td></tr>
+      <tr><td class="mod-name">v1/sample/</td><td class="mod-deps"><span class="dep-tag">config.model</span><span class="dep-tag">sampling_params</span><span class="dep-tag">v1.outputs</span><span class="dep-tag">v1.spec_decode.metadata</span><span class="dep-tag">logits_process</span><span class="dep-tag">model_executor.layers.utils</span></td></tr>
+      <tr><td class="mod-name">model_executor/models/</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">attention.layer</span><span class="dep-tag">model_executor.layers.*</span><span class="dep-tag">distributed</span><span class="dep-tag">multimodal</span><span class="dep-tag">sequence</span><span class="dep-tag">compilation</span></td></tr>
+      <tr><td class="mod-name">multimodal/</td><td class="mod-deps"><span class="dep-tag">config.multimodal</span><span class="dep-tag">tokenizers</span><span class="dep-tag">transformers_utils</span><span class="dep-tag">distributed</span><span class="dep-tag">connections</span></td></tr>
+      <tr><td class="mod-name">inputs/</td><td class="mod-deps"><span class="dep-tag">config</span><span class="dep-tag">multimodal</span><span class="dep-tag">tokenizers</span><span class="dep-tag">v1.metrics.stats</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<!-- ==================== PANEL 4: NETWORK GRAPH ==================== -->
+<div class="panel" id="panel-network">
+  <h2 class="section-title">交互式网络关系图</h2>
+  <p class="section-subtitle">拖动节点调整布局。悬停高亮连接关系。节点大小反映连接数量。</p>
+
+  <div class="graph-container">
+    <canvas class="graph-canvas" id="graph-canvas" width="1152" height="600" style="cursor: grab;"></canvas>
+    <div class="graph-legend">
+      <div class="legend-item"><div class="legend-dot" style="background: var(--actor1)"></div>用户接入层</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--actor2)"></div>引擎层</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--actor3)"></div>核心调度层</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--actor4)"></div>执行层</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--actor5)"></div>模型计算层</div>
+      <div class="legend-item"><div class="legend-dot" style="background: var(--text3)"></div>基础设施</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Tab switching
+function showPanel(id) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+  event.target.classList.add('active');
+  if (id === 'network' && !graphInitialized) initGraph();
+}
+
+// SVG node info
+function showNodeInfo(el) {
+  const info = el.dataset.info;
+  const box = document.getElementById('node-info');
+  box.textContent = info;
+  box.style.display = 'block';
+  document.querySelectorAll('.node rect').forEach(r => r.style.strokeWidth = '0');
+  el.querySelector('rect').style.stroke = '#fff';
+  el.querySelector('rect').style.strokeWidth = '3';
+}
+
+// Network Graph
+let graphInitialized = false;
+function initGraph() {
+  graphInitialized = true;
+  const canvas = document.getElementById('graph-canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.offsetWidth * dpr;
+  canvas.height = canvas.offsetHeight * dpr;
+  ctx.scale(dpr, dpr);
+  const W = canvas.offsetWidth, H = canvas.offsetHeight;
+
+  const colors = { user: '#D94F30', engine: '#2A7B9B', core: '#7B6DAA', exec: '#D4A843', model: '#2D8B55', infra: '#9E9790' };
+
+  const nodes = [
+    { id: 'LLM', label: 'LLM', group: 'user', x: 120, y: 80 },
+    { id: 'API', label: 'OpenAI API', group: 'user', x: 300, y: 60 },
+    { id: 'CLI', label: 'CLI', group: 'user', x: 460, y: 80 },
+    { id: 'Input', label: 'InputProc', group: 'user', x: 600, y: 60 },
+    { id: 'LLMEng', label: 'LLMEngine', group: 'engine', x: 120, y: 200 },
+    { id: 'Async', label: 'AsyncLLM', group: 'engine', x: 300, y: 180 },
+    { id: 'Core', label: 'EngineCore', group: 'engine', x: 480, y: 200 },
+    { id: 'Client', label: 'CoreClient', group: 'engine', x: 660, y: 180 },
+    { id: 'Sched', label: 'Scheduler', group: 'core', x: 140, y: 330 },
+    { id: 'KVMgr', label: 'KVCacheMgr', group: 'core', x: 320, y: 340 },
+    { id: 'BPool', label: 'BlockPool', group: 'core', x: 500, y: 330 },
+    { id: 'StructOut', label: 'StructOutput', group: 'core', x: 680, y: 340 },
+    { id: 'Exec', label: 'Executor', group: 'exec', x: 100, y: 450 },
+    { id: 'Worker', label: 'Worker', group: 'exec', x: 280, y: 460 },
+    { id: 'Runner', label: 'ModelRunner', group: 'exec', x: 480, y: 450 },
+    { id: 'SpecDec', label: 'SpecDecode', group: 'exec', x: 680, y: 460 },
+    { id: 'Models', label: 'Models', group: 'model', x: 140, y: 560 },
+    { id: 'Attn', label: 'Attention', group: 'model', x: 320, y: 560 },
+    { id: 'Sample', label: 'Sampler', group: 'model', x: 500, y: 560 },
+    { id: 'MM', label: 'Multimodal', group: 'model', x: 680, y: 560 },
+    { id: 'Config', label: 'Config', group: 'infra', x: 800, y: 300 },
+    { id: 'Dist', label: 'Distributed', group: 'infra', x: 800, y: 420 },
+    { id: 'Token', label: 'Tokenizers', group: 'infra', x: 800, y: 180 },
+  ];
+
+  const edges = [
+    ['LLM','LLMEng'],['API','Async'],['CLI','API'],['LLM','Input'],['API','Input'],
+    ['LLMEng','Client'],['Async','Client'],['Client','Core'],
+    ['Core','Sched'],['Core','Exec'],['Sched','KVMgr'],['KVMgr','BPool'],['Sched','StructOut'],
+    ['Exec','Worker'],['Worker','Runner'],['Runner','SpecDec'],
+    ['Runner','Models'],['Runner','Attn'],['Runner','Sample'],['Runner','MM'],
+    ['Models','Attn'],['SpecDec','Sample'],['Input','MM'],['Input','Token'],
+    ['Core','Config'],['Sched','Config'],['Runner','Config'],['Exec','Dist'],['Runner','Dist'],
+    ['LLMEng','Token'],['Async','Token'],
+  ];
+
+  const nodeMap = {};
+  nodes.forEach(n => { nodeMap[n.id] = n; n.vx = 0; n.vy = 0; n.conns = 0; });
+  edges.forEach(([a,b]) => { nodeMap[a].conns++; nodeMap[b].conns++; });
+
+  let dragging = null, hovered = null, mx = 0, my = 0;
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    edges.forEach(([a, b]) => {
+      const na = nodeMap[a], nb = nodeMap[b];
+      const isHL = hovered && (hovered.id === a || hovered.id === b);
+      ctx.beginPath();
+      ctx.moveTo(na.x, na.y);
+      ctx.lineTo(nb.x, nb.y);
+      ctx.strokeStyle = isHL ? colors[hovered.group] : '#E5DFD6';
+      ctx.lineWidth = isHL ? 2.5 : 1;
+      ctx.globalAlpha = isHL ? 1 : 0.5;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+
+    nodes.forEach(n => {
+      const r = 14 + n.conns * 2;
+      const isHL = hovered && hovered.id === n.id;
+      const isConn = hovered && edges.some(([a,b]) => (a===hovered.id && b===n.id) || (b===hovered.id && a===n.id));
+
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = colors[n.group];
+      ctx.globalAlpha = (hovered && !isHL && !isConn) ? 0.3 : 1;
+      ctx.fill();
+
+      if (isHL) {
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.shadowColor = colors[n.group];
+        ctx.shadowBlur = 15;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      ctx.fillStyle = (hovered && !isHL && !isConn) ? 'rgba(44,42,40,0.3)' : '#2C2A28';
+      ctx.globalAlpha = 1;
+      ctx.font = '600 11px "DM Sans"';
+      ctx.textAlign = 'center';
+      ctx.fillText(n.label, n.x, n.y + r + 14);
+    });
+  }
+
+  function getNode(x, y) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i], r = 14 + n.conns * 2;
+      if (Math.hypot(x - n.x, y - n.y) < r + 4) return n;
+    }
+    return null;
+  }
+
+  canvas.addEventListener('mousedown', e => {
+    const rect = canvas.getBoundingClientRect();
+    dragging = getNode(e.clientX - rect.left, e.clientY - rect.top);
+  });
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mx = e.clientX - rect.left; my = e.clientY - rect.top;
+    if (dragging) { dragging.x = mx; dragging.y = my; }
+    hovered = getNode(mx, my);
+    canvas.style.cursor = hovered ? 'pointer' : 'grab';
+    draw();
+  });
+  canvas.addEventListener('mouseup', () => { dragging = null; });
+  canvas.addEventListener('mouseleave', () => { dragging = null; hovered = null; draw(); });
+
+  draw();
+}
+</script>
+
+
+
+</body></html>

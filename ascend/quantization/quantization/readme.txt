@@ -15,6 +15,8 @@
 2、进入到msit/msmodelslim的目录并运行安装脚本
 cd msit/msmodelslim
 bash install.sh
+3、在当前目录下执行量化脚本
+
 
 3、
 1)将w8a8权重目录下的quant_model_description.json中的model.language_model.替换为model.

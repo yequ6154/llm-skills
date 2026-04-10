@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vLLM 深度剖析 - 从请求到推理的全链路解析</title>
+<style>
+:root {
+  --bg-primary: #0f1117;
+  --bg-secondary: #1a1d2e;
+  --bg-card: #222640;
+  --bg-code: #161929;
+  --accent-blue: #4f8cff;
+  --accent-cyan: #22d3ee;
+  --accent-green: #34d399;
+  --accent-orange: #fb923c;
+  --accent-pink: #f472b6;
+  --accent-purple: #a78bfa;
+  --accent-red: #f87171;
+  --accent-yellow: #fbbf24;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border: #2d3352;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.7;
+  overflow-x: hidden;
+}
+.hero {
+  background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 50%, #0c1222 100%);
+  padding: 60px 40px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+}
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 30% 50%, rgba(79,140,255,0.08) 0%, transparent 50%),
+              radial-gradient(circle at 70% 50%, rgba(34,211,238,0.06) 0%, transparent 50%);
+  animation: heroGlow 8s ease-in-out infinite alternate;
+}
+@keyframes heroGlow {
+  0% { transform: translate(0,0); }
+  100% { transform: translate(-2%,1%); }
+}
+.hero h1 {
+  font-size: 2.8em;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  position: relative;
+  margin-bottom: 12px;
+}
+.hero p {
+  color: var(--text-secondary);
+  font-size: 1.15em;
+  position: relative;
+}
+
+/* Nav */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(15,17,23,0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  gap: 0;
+}
+.nav a {
+  display: inline-block;
+  padding: 14px 18px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.9em;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.nav a:hover, .nav a.active {
+  color: var(--accent-cyan);
+  border-bottom-color: var(--accent-cyan);
+}
+
+/* Container */
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px 80px;
+}
+
+/* Section */
+.section {
+  margin-top: 60px;
+  scroll-margin-top: 60px;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+.section-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  font-weight: 800;
+  font-size: 1.1em;
+  flex-shrink: 0;
+}
+.section-header h2 {
+  font-size: 1.65em;
+  font-weight: 700;
+}
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow);
+}
+.card h3 {
+  font-size: 1.2em;
+  margin-bottom: 16px;
+  color: var(--accent-cyan);
+}
+.card h4 {
+  font-size: 1.05em;
+  margin: 20px 0 10px;
+  color: var(--accent-purple);
+}
+.card p, .card li {
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.card ul, .card ol {
+  padding-left: 20px;
+}
+
+/* Q&A */
+.qa-question {
+  background: linear-gradient(135deg, rgba(79,140,255,0.12), rgba(34,211,238,0.08));
+  border-left: 4px solid var(--accent-blue);
+  padding: 16px 20px;
+  border-radius: 0 10px 10px 0;
+  margin-bottom: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 1.05em;
+}
+
+/* Code */
+pre {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 0.88em;
+  line-height: 1.65;
+  margin: 14px 0;
+  color: var(--text-primary);
+}
+code {
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  background: rgba(79,140,255,0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  color: var(--accent-cyan);
+}
+pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+/* Diagram box */
+.diagram {
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  margin: 16px 0;
+  overflow-x: auto;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--text-secondary);
+}
+
+/* Table */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 0.92em;
+}
+th {
+  background: rgba(79,140,255,0.15);
+  color: var(--accent-cyan);
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
+}
+td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+tr:hover td {
+  background: rgba(79,140,255,0.05);
+}
+
+/* Highlight tags */
+.tag {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 6px;
+  font-size: 0.82em;
+  font-weight: 600;
+  margin: 2px 4px 2px 0;
+}
+.tag-blue { background: rgba(79,140,255,0.2); color: var(--accent-blue); }
+.tag-green { background: rgba(52,211,153,0.2); color: var(--accent-green); }
+.tag-orange { background: rgba(251,146,60,0.2); color: var(--accent-orange); }
+.tag-pink { background: rgba(244,114,182,0.2); color: var(--accent-pink); }
+.tag-purple { background: rgba(167,139,250,0.2); color: var(--accent-purple); }
+.tag-red { background: rgba(248,113,113,0.2); color: var(--accent-red); }
+.tag-yellow { background: rgba(251,191,36,0.2); color: var(--accent-yellow); }
+.tag-cyan { background: rgba(34,211,238,0.2); color: var(--accent-cyan); }
+
+/* Flow steps */
+.flow-step {
+  display: flex;
+  gap: 16px;
+  margin: 14px 0;
+  align-items: flex-start;
+}
+.flow-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.85em;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.flow-content {
+  flex: 1;
+}
+.flow-content strong {
+  color: var(--text-primary);
+}
+
+/* Color helpers */
+.c-blue { color: var(--accent-blue); }
+.c-cyan { color: var(--accent-cyan); }
+.c-green { color: var(--accent-green); }
+.c-orange { color: var(--accent-orange); }
+.c-pink { color: var(--accent-pink); }
+.c-purple { color: var(--accent-purple); }
+.c-red { color: var(--accent-red); }
+.c-yellow { color: var(--accent-yellow); }
+
+.bg-blue { background: rgba(79,140,255,0.2); color: var(--accent-blue); }
+.bg-cyan { background: rgba(34,211,238,0.2); color: var(--accent-cyan); }
+.bg-green { background: rgba(52,211,153,0.2); color: var(--accent-green); }
+.bg-orange { background: rgba(251,146,60,0.2); color: var(--accent-orange); }
+.bg-pink { background: rgba(244,114,182,0.2); color: var(--accent-pink); }
+.bg-purple { background: rgba(167,139,250,0.2); color: var(--accent-purple); }
+
+/* Callout */
+.callout {
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin: 16px 0;
+  border-left: 4px solid;
+}
+.callout-info {
+  background: rgba(79,140,255,0.08);
+  border-left-color: var(--accent-blue);
+}
+.callout-warn {
+  background: rgba(251,191,36,0.08);
+  border-left-color: var(--accent-yellow);
+}
+.callout-key {
+  background: rgba(52,211,153,0.08);
+  border-left-color: var(--accent-green);
+}
+.callout-key strong, .callout-info strong, .callout-warn strong {
+  color: var(--text-primary);
+}
+
+/* Collapsible */
+details {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 12px 0;
+}
+details summary {
+  padding: 14px 20px;
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  user-select: none;
+}
+details summary:hover {
+  color: var(--accent-blue);
+}
+details[open] summary {
+  border-bottom: 1px solid var(--border);
+}
+details > div {
+  padding: 16px 20px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .hero h1 { font-size: 1.8em; }
+  .container { padding: 0 16px 60px; }
+  .card { padding: 18px; }
+  .nav a { padding: 12px 12px; font-size: 0.8em; }
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>vLLM 深度剖析</h1>
+  <p>从请求处理到 GPU 计算的全链路技术解析 &nbsp;|&nbsp; 基于 vLLM V1 源码</p>
+</div>
+
+<div class="nav">
+  <div class="nav-inner">
+    <a href="#s1">Chunked Prefill</a>
+    <a href="#s2">1D vs 2D 张量</a>
+    <a href="#s3">GPU 并行本质</a>
+    <a href="#s4">Continuous Batching</a>
+    <a href="#s5">TTFT 优化</a>
+    <a href="#s6">inter_prefill_budget</a>
+    <a href="#s7">GPU 饱和点</a>
+    <a href="#s8">Benchmark 参数</a>
+    <a href="#s9">投机推理</a>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<!-- SECTION 1: Chunked Prefill 混合 Batch -->
+<!-- ============================================================ -->
+<div class="section" id="s1">
+  <div class="section-header">
+    <span class="section-num bg-blue">01</span>
+    <h2>Chunked Prefill：混合 Batch 的底层处理</h2>
+  </div>
+
+  <div class="qa-question">开启 chunked prefill 后，GPU forward 的输入里既有 prefill 的 token，也有 decode 的 token，模型底层是如何处理这种混合输入的？</div>
+
+  <div class="card">
+    <h3>核心理解：模型不区分，Attention 层区分</h3>
+    <p>一个关键的认知：<strong class="c-cyan">GPU forward 的时候，不存在"prefill token"和"decode token"两种不同类型</strong>。从 Transformer 模型的大部分层（Embedding、FFN/MLP、LayerNorm 等）来看，所有 token 都是完全一样的——都是一个 hidden_state 向量，经过相同的矩阵运算。</p>
+    <p><strong class="c-orange">唯一不同的地方是 Attention 层</strong>，因为：</p>
+    <ul>
+      <li><strong>Prefill token</strong>：需要 attend 到同一请求中它前面的所有 token（因果注意力），并把自己的 KV 写入 KV Cache</li>
+      <li><strong>Decode token</strong>：只有 1 个 query token，需要 attend 到 KV Cache 中该请求的所有历史 KV，并把自己的 KV 写入 KV Cache</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>混合 Batch 的数据布局</h3>
+    <p>Scheduler 调度了一个混合 batch（请求A: prefill 512 tokens, 请求B: decode 1 token, 请求C: prefill 256 tokens），所有 token 被<strong class="c-green">拼接为一个一维张量</strong>：</p>
+<pre><code>输入 token_ids: [A_0, A_1, ..., A_511, B_0, C_0, C_1, ..., C_255]
+                |--- 512 tokens ---|  |1|  |--- 256 tokens ---|
+                    请求A (prefill)    请求B    请求C (prefill)
+                                     (decode)
+
+total_num_scheduled_tokens = 512 + 1 + 256 = 769</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>两个关键元数据</h3>
+
+    <h4>1. query_start_loc — 每个请求的 query 在 batch 中的起始位置</h4>
+<pre><code>query_start_loc = [0, 512, 513, 769]
+                   ^    ^    ^    ^
+                   A起点 B起点 C起点 总结束
+
+通过 query_start_loc[i+1] - query_start_loc[i] 得到 query 长度:
+  请求A: 512 (prefill, 多 query)
+  请求B: 1   (decode, 单 query)
+  请求C: 256 (prefill, 多 query)</code></pre>
+
+    <h4>2. seq_lens — 每个请求的完整上下文长度（含历史 KV）</h4>
+<pre><code>seq_lens = [512, 1025, 256]
+            ^     ^     ^
+         A本次512  B已有1024+1=1025  C本次256
+
+请求A: query_len=512, seq_len=512    → 相等, prefill
+请求B: query_len=1,   seq_len=1025   → 远小于, decode
+请求C: query_len=256, seq_len=256    → 相等, prefill</code></pre>
+    <p>来源代码 <code>gpu_model_runner.py</code>:</p>
+<pre><code>self.query_start_loc.np[0] = 0
+self.query_start_loc.np[1 : num_reqs + 1] = cu_num_tokens
+
+self.seq_lens[:num_reqs] = (
+    self.num_computed_tokens[:num_reqs] + num_scheduled_tokens_gpu
+)</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>FlashAttention 如何处理混合 Batch</h3>
+    <p>vLLM V1 使用 <code>flash_attn_varlen_func</code>（variable length），原生支持混合长度 batch：</p>
+<pre><code>flash_attn_varlen_func(
+    q=query[:num_actual_tokens],     # 所有 769 个 query
+    k=key_cache,                     # 整个 Paged KV Cache
+    v=value_cache,
+    cu_seqlens_q=query_start_loc,    # [0, 512, 513, 769]
+    seqused_k=seq_lens,              # [512, 1025, 256]
+    block_table=block_table,         # 每请求的 KV block 位置
+    causal=True,                     # 因果 mask
+)</code></pre>
+
+    <div class="callout callout-key">
+      <strong>FlashAttention 根本不需要知道哪个是"prefill"哪个是"decode"。</strong><br>
+      它只看 <code>query_len</code> 和 <code>seq_len</code>，自动按因果 mask 处理每个请求。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>KV Cache 写入：slot_mapping</h3>
+    <p><code>slot_mapping</code> 是长度为 769 的一维张量，对每个 token 精确指定 KV Cache 存储位置：</p>
+<pre><code>reshape_and_cache_flash(
+    key, value,            # 当前 batch 所有 token 的 KV
+    key_cache, value_cache,# Paged KV Cache
+    slot_mapping,          # [slot_A_0, ..., slot_A_511, slot_B_0, slot_C_0, ...]
+    kv_cache_dtype,
+    k_scale, v_scale,
+)
+// 不区分 prefill/decode, 统一写入</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>总结：各环节是否区分 prefill/decode</h3>
+    <table>
+      <tr><th>环节</th><th>是否区分</th><th>机制</th></tr>
+      <tr><td>Embedding</td><td><span class="tag tag-green">不区分</span></td><td>统一查表</td></tr>
+      <tr><td>QKV Projection</td><td><span class="tag tag-green">不区分</span></td><td>统一矩阵乘法</td></tr>
+      <tr><td>KV Cache 写入</td><td><span class="tag tag-green">不区分</span></td><td>slot_mapping 指定位置</td></tr>
+      <tr><td>Attention 计算</td><td><span class="tag tag-orange">隐式区分</span></td><td>query_start_loc + seq_lens + block_table</td></tr>
+      <tr><td>MLP/FFN</td><td><span class="tag tag-green">不区分</span></td><td>统一矩阵乘法</td></tr>
+      <tr><td>采样</td><td><span class="tag tag-green">不区分</span></td><td>取每请求最后 token 的 logits</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 2: 1D vs 2D -->
+<!-- ============================================================ -->
+<div class="section" id="s2">
+  <div class="section-header">
+    <span class="section-num bg-cyan">02</span>
+    <h2>为什么不用 2D 张量而是拼接为 1D？</h2>
+  </div>
+
+  <div class="qa-question">一个 batch 的 requests 被拼接为一个一维张量送入模型，为什么不是组成二维的张量并行处理？</div>
+
+  <div class="card">
+    <h3>2D Padded 的巨大浪费</h3>
+<pre><code>═══ 2D Padded: [3, 512, 4096] ═══
+
+请求A: [实际512个token .........................]  ← 512 有效
+请求B: [1个token | pad pad ... 511个pad]           ← 1 有效, 511 浪费!
+请求C: [256个token ... | pad ... 256个pad]          ← 256 有效, 256 浪费!
+
+总计算: 3 × 512 = 1536 个 token
+有效:   769 个
+浪费:   767 个 (49.9%!)
+
+═══ 1D Packed: [769, 4096] ═══
+
+[A_0, A_1, ..., A_511, B_0, C_0, C_1, ..., C_255]
+
+总计算: 769 个 token
+浪费:   0 个</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>PyTorch nn.Linear 的真相</h3>
+    <p>你可能以为 <code>[3, 512, 4096]</code> 的第一个维度 3 代表"3 个请求并行处理"。但实际上：</p>
+<pre><code># FFN 层的 Linear: weight shape = [4096, 11008]
+
+# 输入是 3D: [3, 512, 4096]
+output = F.linear(input, weight)
+
+# PyTorch 内部实际执行:
+input_2d = input.reshape(3 * 512, 4096)  # → [1536, 4096]  ← 展平!
+output_2d = input_2d @ weight.T           # → [1536, 11008] ← 实际 GEMM
+output = output_2d.reshape(3, 512, 11008) # → reshape 回去</code></pre>
+    <div class="callout callout-key">
+      <strong>PyTorch 的 nn.Linear 在底层永远是把前面的维度展平成一个大的 2D 矩阵来做 GEMM。</strong>
+      <br>所以 [3, 512, 4096] 实际是 [1536, 4096]，而 vLLM 的 [769, 4096] 只是 M 更小（且没有浪费）。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 3: GPU 并行本质 -->
+<!-- ============================================================ -->
+<div class="section" id="s3">
+  <div class="section-header">
+    <span class="section-num bg-green">03</span>
+    <h2>GPU 并行的本质：CUDA 线程，不是张量维度</h2>
+  </div>
+
+  <div class="qa-question">一维 [769, 4096] 在经过 FFN 层时如何做到并行处理？</div>
+
+  <div class="card">
+    <h3>矩阵乘法在 GPU 上的并行方式</h3>
+    <p>GEMM <code>C = A × B</code>，其中 <code>A: [M, K]</code>, <code>B: [K, N]</code>，GPU 把输出矩阵 C 切成 tile，每个 tile 由一个 Thread Block 独立计算：</p>
+<div class="diagram">输出矩阵 C: [M, N]
+┌──────┬──────┬──────┬──────┬───┐
+│TB(0,0)│TB(0,1)│TB(0,2)│TB(0,3)│...│  ← 每个格子是一个 tile
+├──────┼──────┼──────┼──────┼───┤     (比如 128×128)
+│TB(1,0)│TB(1,1)│TB(1,2)│TB(1,3)│...│
+├──────┼──────┼──────┼──────┼───┤     每个 tile 由一个
+│TB(2,0)│TB(2,1)│TB(2,2)│TB(2,3)│...│  Thread Block 独立计算
+├──────┼──────┼──────┼──────┼───┤
+│ ...  │ ...  │ ...  │ ...  │...│     <span class="c-green">所有 Thread Block 同时执行!</span>
+└──────┴──────┴──────┴──────┴───┘
+
+并行度 = ceil(M/tile_M) × ceil(N/tile_N)</div>
+    <p>具体对比：</p>
+    <table>
+      <tr><th>方式</th><th>矩阵大小</th><th>Thread Block 数</th><th>有效计算</th></tr>
+      <tr><td>1D Packed</td><td>[769, 4096] × [4096, 11008]</td><td>6 × 86 = 516</td><td><span class="c-green">100%</span></td></tr>
+      <tr><td>2D Padded</td><td>[1536, 4096] × [4096, 11008]</td><td>12 × 86 = 1032</td><td><span class="c-red">~50%</span></td></tr>
+    </table>
+    <p><strong class="c-cyan">516 个 Thread Block 全部同时执行，769 个 token 都在并行计算。</strong>2D 的 1032 个也是同时执行，但其中约 50% 在算 padding 的无用数据。</p>
+  </div>
+
+  <div class="card">
+    <h3>类比理解</h3>
+<div class="diagram"><span class="c-orange">2D Padded 方式 — 工厂分组:</span>
+  A组: 512 个工件, 512 个工人处理         ✓ 全部有效
+  B组: 1 个工件 + 511 个空工作台          ✗ 511个工人在摸鱼!
+  C组: 256 个工件 + 256 个空工作台        ✗ 256个工人在摸鱼!
+  实际利用率: 769/1536 = 50%
+
+<span class="c-green">1D Packed 方式 — 传送带:</span>
+  [A的512个, B的1个, C的256个] = 769个工件
+  769 个工人同时处理, 没有任何人闲置
+  实际利用率: 769/769 = 100%</div>
+
+    <div class="callout callout-key">
+      <strong>一维拼接是一个纯粹的工程优化：消除 padding 浪费，同时不牺牲任何并行性。</strong>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>认知纠正</h3>
+    <table>
+      <tr><th>误解</th><th>事实</th></tr>
+      <tr><td>"batch 维度让 3 个请求并行"</td><td>batch 维度只是逻辑概念，PyTorch 内部展平为 [3×512, hidden] 做计算</td></tr>
+      <tr><td>"一维 [769] 是串行处理"</td><td>矩阵乘法的行之间天然独立，GPU 对每行分配独立线程块，全部并行</td></tr>
+      <tr><td>"二维比一维更高效"</td><td>恰恰相反，二维需要 padding，浪费大量 GPU 计算</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 4: Continuous Batching -->
+<!-- ============================================================ -->
+<div class="section" id="s4">
+  <div class="section-header">
+    <span class="section-num bg-orange">04</span>
+    <h2>Continuous Batching 调度逻辑</h2>
+  </div>
+
+  <div class="qa-question">Continuous Batching 的逻辑是怎样的？核心代码在哪？</div>
+
+  <div class="card">
+    <h3>核心代码：<code>vllm/v1/core/sched/scheduler.py</code></h3>
+    <p><code>Scheduler.schedule()</code> 方法每次迭代动态决定哪些请求参与本次 batch：</p>
+
+    <div class="flow-step">
+      <span class="flow-num bg-blue">1</span>
+      <div class="flow-content"><strong>计算 Token Budget</strong><br><code>token_budget = min(max_num_batched_tokens, available_kv_slots)</code><br>每步可处理的最大 token 数</div>
+    </div>
+    <div class="flow-step">
+      <span class="flow-num bg-green">2</span>
+      <div class="flow-content"><strong>优先调度 Running 请求 (decode)</strong><br>已在运行的请求优先拿到预算，每个只需 1 token。不够空间时触发 preemption</div>
+    </div>
+    <div class="flow-step">
+      <span class="flow-num bg-orange">3</span>
+      <div class="flow-content"><strong>用剩余预算调度 Waiting 请求 (prefill)</strong><br>新请求用剩余的 token_budget 做 prefill。如果 prompt 太长可 chunk 分片</div>
+    </div>
+    <div class="flow-step">
+      <span class="flow-num bg-purple">4</span>
+      <div class="flow-content"><strong>构建 SchedulerOutput</strong><br>打包所有调度决策发送给 GPU Worker 执行</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>关键参数</h3>
+    <table>
+      <tr><th>参数</th><th>作用</th></tr>
+      <tr><td><code>max_num_batched_tokens</code></td><td>全局 token 预算上限</td></tr>
+      <tr><td><code>max_num_seqs</code></td><td>最大并发请求数</td></tr>
+      <tr><td><code>long_prefill_token_threshold</code></td><td>超过此长度的 prefill 会被分片</td></tr>
+      <tr><td><code>inter_prefill_budget</code></td><td>prefill 之间的预算限制（防 HoL blocking）</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 5: TTFT 优化 -->
+<!-- ============================================================ -->
+<div class="section" id="s5">
+  <div class="section-header">
+    <span class="section-num bg-pink">05</span>
+    <h2>TTFT 优化：Decode 优先会不会饿死 Prefill？</h2>
+  </div>
+
+  <div class="qa-question">Continuous Batching 优先调度 running 请求，如果一直没有足够显存，新请求会一直等待，这不就影响 TTFT 了吗？</div>
+
+  <div class="card">
+    <h3>vLLM 的多层防护机制</h3>
+
+    <h4>方案 1: max_num_batched_tokens 上限</h4>
+    <p>限制单步最大 token 数。Decode 请求多了自然就有 token 预算剩余给 prefill。</p>
+
+    <h4>方案 2: Chunked Prefill 分片</h4>
+    <p>长 prompt 不一次性占完预算，分成多个 chunk 逐步处理，每个 chunk 之间可以插入 decode 请求。</p>
+
+    <h4>方案 3: long_prefill_token_threshold</h4>
+    <p>自动对超过阈值的 prefill 进行分片，防止单个长 prefill 霸占 GPU。</p>
+
+    <h4>方案 4: inter_prefill_budget <span class="tag tag-green">新特性</span></h4>
+    <p>解决 prefill 之间的 Head-of-Line blocking 问题（详见下一节）。</p>
+
+    <h4>方案 5: Preemption 抢占</h4>
+    <p>KV Cache 不够时，可以 swap out 低优先级的 running 请求，腾出空间给新请求。</p>
+
+    <h4>方案 6: PD 分离</h4>
+    <p>将 prefill 和 decode 放在不同节点，彻底消除互相干扰。</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 6: inter_prefill_budget -->
+<!-- ============================================================ -->
+<div class="section" id="s6">
+  <div class="section-header">
+    <span class="section-num bg-purple">06</span>
+    <h2>inter_prefill_budget 深度解析</h2>
+  </div>
+
+  <div class="qa-question">inter_prefill_budget 解决的是什么问题？怎么理解 Head-of-Line blocking？</div>
+
+  <div class="card">
+    <h3>问题场景：Prefill 之间的队头阻塞</h3>
+<div class="diagram">请求队列: [A: 4096 tokens] [B: 32 tokens] [C: 64 tokens]
+max_num_batched_tokens = 8192
+
+<span class="c-red">没有 inter_prefill_budget 时:</span>
+Step 1: 调度A (4096 tokens) + B (32) + C (64) → 一步搞定
+        但 B 和 C 必须等 A 的 4096 token 全部处理完!
+        A 的 prefill 耗时巨大 → B,C 的 TTFT 被拉高
+
+<span class="c-green">有 inter_prefill_budget = 512 时:</span>
+Step 1: A 只做 512 tokens (chunk 1) + B (32) + C (64)
+        B,C 很快完成首次输出 → TTFT 极低!
+Step 2: A 继续 512 tokens (chunk 2) + B,C 的 decode
+Step 3: A 继续 512 tokens (chunk 3) + ...
+...直到 A 的 prefill 全部完成</div>
+  </div>
+
+  <div class="card">
+    <h3>效果</h3>
+    <p>PR #33743 的基准测试（Gemma-3-27B）：</p>
+    <table>
+      <tr><th>指标</th><th>变化</th></tr>
+      <tr><td>TTFT (Time To First Token)</td><td><span class="c-green">降低 37%</span></td></tr>
+      <tr><td>TPOT (Time Per Output Token)</td><td><span class="c-orange">仅增加 5-10%</span></td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 7: GPU 饱和点 -->
+<!-- ============================================================ -->
+<div class="section" id="s7">
+  <div class="section-header">
+    <span class="section-num bg-cyan">07</span>
+    <h2>GPU 计算饱和点测试</h2>
+  </div>
+
+  <div class="qa-question">怎么知道 GPU 计算 token 的饱和点是多大？针对不同芯片怎么得到这个饱和点？</div>
+
+  <div class="card">
+    <h3>饱和点的含义</h3>
+    <p><strong class="c-cyan">GPU 饱和点</strong>是指 prefill 时，输入 token 数增加到某个值后，单 token 处理时间不再下降（GPU 算力被完全利用）的临界点。</p>
+
+    <div class="callout callout-info">
+      <strong>为什么存在饱和点？</strong><br>
+      GPU 有固定的计算核心数。当 token 太少时，很多核心闲置（memory-bound），随着 token 增多，核心利用率提高，单 token 耗时下降。
+      当 token 多到完全填满所有核心（compute-bound），再增加 token 就不会更快了——这就是饱和点。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>测试方法</h3>
+<pre><code>for INPUT_LEN in 32 64 128 256 512 1024 2048 4096; do
+  vllm bench serve \
+    --model your-model \
+    --input-len $INPUT_LEN \
+    --output-len 1 \
+    --num-prompts 5 \
+    --request-rate 0.1 \
+    --max-num-batched-tokens $INPUT_LEN
+done</code></pre>
+    <p>观察 <code>time_per_token = prefill_time / INPUT_LEN</code>：</p>
+<pre><code>INPUT_LEN   prefill_time   time_per_token
+32          2.1ms          65.6 μs/token    ← memory-bound
+64          2.3ms          35.9 μs/token    ← 在下降
+128         2.8ms          21.9 μs/token    ← 在下降
+256         3.5ms          13.7 μs/token    ← 在下降
+512         5.2ms          10.2 μs/token    ← 接近饱和
+1024        9.8ms          9.6 μs/token     ← <span class="c-green">基本饱和!</span>
+2048        19.5ms         9.5 μs/token     ← 不再下降
+4096        38.8ms         9.5 μs/token     ← 确认饱和</code></pre>
+    <p>当 <code>time_per_token</code> <strong>不再明显下降</strong>时，那个 <code>INPUT_LEN</code> 就是饱和点。</p>
+  </div>
+
+  <div class="card">
+    <h3>不同 GPU 的参考饱和点</h3>
+    <table>
+      <tr><th>GPU</th><th>典型饱和点 (7B 模型)</th><th>典型饱和点 (70B 模型)</th></tr>
+      <tr><td>A100 80GB</td><td>~512-1024</td><td>~256-512</td></tr>
+      <tr><td>4090 24GB</td><td>~256-512</td><td>N/A (显存不够)</td></tr>
+      <tr><td>Ascend 910B</td><td>需实测</td><td>需实测</td></tr>
+    </table>
+    <p class="c-yellow">注意: 饱和点与具体模型的隐藏层维度、注意力头数、MLP 结构等密切相关，必须实际测试。</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 8: Benchmark 参数 -->
+<!-- ============================================================ -->
+<div class="section" id="s8">
+  <div class="section-header">
+    <span class="section-num bg-yellow">08</span>
+    <h2>Benchmark 参数详解</h2>
+  </div>
+
+  <div class="qa-question">--request-rate 设置更小是不是就能确保每次处理一个请求来测试饱和点？</div>
+
+  <div class="card">
+    <h3>request-rate 的含义</h3>
+<pre><code>--request-rate 0.5  → 每秒发 0.5 个请求 = 每 2 秒 1 个
+--request-rate 0.1  → 每秒发 0.1 个请求 = 每 10 秒 1 个
+--request-rate inf  → 一次性全发（压力测试模式）</code></pre>
+    <p>确保单请求隔离测试的原则：<strong>发送间隔 > 单请求处理时间</strong></p>
+  </div>
+
+  <div class="card">
+    <h3>参数互相关系</h3>
+    <table>
+      <tr><th>参数</th><th>含义</th><th>关系</th></tr>
+      <tr><td><code>--max-num-batched-tokens</code></td><td>全局 token 预算上限</td><td>总预算</td></tr>
+      <tr><td><code>--inter-prefill-budget</code></td><td>prefill 子预算</td><td>≤ max-num-batched-tokens</td></tr>
+      <tr><td><code>--num-prompts</code></td><td>总共发几个请求</td><td>统计样本数</td></tr>
+      <tr><td><code>--request-rate</code></td><td>每秒发几个请求</td><td>控制请求间隔</td></tr>
+    </table>
+    <div class="callout callout-warn">
+      <strong>测饱和点时</strong>，设 <code>--request-rate 0.1</code> 或更小，确保请求不重叠。<br>
+      <strong>测吞吐量时</strong>，设 <code>--request-rate inf</code>，让系统满载。
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION 9: 投机推理 -->
+<!-- ============================================================ -->
+<div class="section" id="s9">
+  <div class="section-header">
+    <span class="section-num bg-pink">09</span>
+    <h2>投机推理 (Speculative Decoding)</h2>
+  </div>
+
+  <div class="qa-question">投机推理的逻辑是怎样的？大模型怎么验证？什么机制决定选择小模型的输出？</div>
+
+  <div class="card">
+    <h3>核心思想</h3>
+    <p>大模型验证 K 个 token 的开销 ≈ 生成 1 个 token 的开销（因为 K 个 token 可以并行 forward），猜对了就"免费"获得多个 token。</p>
+<div class="diagram"><span class="c-orange">普通生成 (5个token):</span>
+  [Forward] [Forward] [Forward] [Forward] [Forward]
+  耗时: 5 × T_large
+
+<span class="c-green">投机推理 (5个token, 全部猜对):</span>
+  [Draft×5] [Verify一次] → 一步出 5+1 个token!
+  耗时: T_draft + T_large ≈ 1.x × T_large</div>
+  </div>
+
+  <div class="card">
+    <h3>vLLM 支持的 Drafter 方法</h3>
+    <table>
+      <tr><th>方法</th><th>类名</th><th>原理</th></tr>
+      <tr><td><span class="tag tag-blue">Draft Model</span></td><td>DraftModelProposer</td><td>独立小模型生成草稿</td></tr>
+      <tr><td><span class="tag tag-green">EAGLE</span></td><td>EagleProposer</td><td>利用大模型 hidden states 的轻量头</td></tr>
+      <tr><td><span class="tag tag-purple">EAGLE3</span></td><td>DFlashProposer</td><td>EAGLE 的优化变体</td></tr>
+      <tr><td><span class="tag tag-orange">Medusa</span></td><td>MedusaProposer</td><td>多头并行预测</td></tr>
+      <tr><td><span class="tag tag-cyan">N-gram</span></td><td>NgramProposer</td><td>基于历史 token 模式匹配（无模型）</td></tr>
+      <tr><td><span class="tag tag-pink">Suffix</span></td><td>SuffixDecodingProposer</td><td>后缀树匹配</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>完整执行流程</h3>
+<div class="diagram">┌───────────────────── GPU Worker ─────────────────────┐
+│                                                       │
+│  <span class="c-blue">Step 1: Scheduler 调度</span>                                │
+│  ┌──────────────────────────────────────────┐         │
+│  │ 把上一轮 drafter 猜测的 K 个 draft token   │         │
+│  │ 连同原始 token 一起放入 scheduled_tokens    │         │
+│  │ 例: 请求A 原本 1 个 decode → 变成 1+K 个   │         │
+│  └────────────────┬─────────────────────────┘         │
+│                   ↓                                    │
+│  <span class="c-green">Step 2: 大模型 Forward (验证)</span>                         │
+│  ┌──────────────────────────────────────────┐         │
+│  │ 大模型一次 forward 处理 原始+K个draft       │         │
+│  │ 在每个 draft position 产出 target logits    │         │
+│  │ 这就是"验证"— 一次 forward 搞定            │         │
+│  └────────────────┬─────────────────────────┘         │
+│                   ↓                                    │
+│  <span class="c-orange">Step 3: Rejection Sampling (接受/拒绝)</span>                │
+│  ┌──────────────────────────────────────────┐         │
+│  │ 逐个比较 draft token vs target token       │         │
+│  │ - 匹配: 接受, 继续下一个                    │         │
+│  │ - 不匹配: 拒绝, 用 target token 替换        │         │
+│  │          后续 draft 全部丢弃               │         │
+│  │ - 全部接受: 额外获得一个 bonus token!       │         │
+│  └────────────────┬─────────────────────────┘         │
+│                   ↓                                    │
+│  <span class="c-purple">Step 4: Drafter 生成新草稿</span>                            │
+│  ┌──────────────────────────────────────────┐         │
+│  │ 用 drafter 为下一轮猜测 K 个新 token        │         │
+│  │ (利用大模型刚产出的 hidden states / token)  │         │
+│  └────────────────┬─────────────────────────┘         │
+│                   ↓                                    │
+│              回到 Step 1                               │
+└───────────────────────────────────────────────────────┘</div>
+  </div>
+
+  <div class="card">
+    <h3>代码层面的关键路径</h3>
+
+    <h4>Step 2: 大模型验证 — 不需要额外验证步骤</h4>
+<pre><code>// gpu_model_runner.py → execute_model
+hidden_states = model(input_ids, positions, ...)       // 一次 forward
+sample_hidden_states = hidden_states[logits_indices]   // 取验证位置的 hidden
+logits = model.compute_logits(sample_hidden_states)    // 计算 logits</code></pre>
+    <p>大模型只做<strong>一次 forward</strong>，draft token 也在输入中，大模型在每个 draft 位置自然产出概率分布。</p>
+
+    <h4>Step 3: 调用 RejectionSampler</h4>
+<pre><code>// gpu_model_runner.py → _sample
+if spec_decode_metadata is not None:
+    sampler_output = self.rejection_sampler(
+        spec_decode_metadata,
+        draft_probs=None,       // N-gram 等无概率分布
+        logits=logits,          // 大模型的 logits
+        sampling_metadata=...,
+    )</code></pre>
+
+    <h4>Step 4: Drafter 提出草稿</h4>
+<pre><code>// gpu_model_runner.py → propose_draft_token_ids
+if spec_config.use_eagle():
+    draft_token_ids = self.drafter.propose(
+        target_token_ids=...,
+        target_hidden_states=target_hidden_states,  // EAGLE: 用大模型 hidden states
+        next_token_ids=next_token_ids,
+    )
+elif spec_config.uses_draft_model():
+    draft_token_ids = self.drafter.propose(
+        target_hidden_states=None,  // Draft Model: 独立运行
+    )</code></pre>
+  </div>
+
+  <div class="card">
+    <h3>验证机制 A：Greedy 验证 (temperature=0)</h3>
+    <p>Triton kernel <code>rejection_greedy_sample_kernel</code>：</p>
+<pre><code>对每个 draft 位置 pos = 0, 1, ..., K-1:
+    draft_token = 小模型猜的 token
+    target_token = argmax(大模型在该位置的 logits)
+
+    if draft_token == target_token:
+        <span class="c-green">接受! output[pos] = target_token</span>
+    else:
+        <span class="c-red">拒绝! output[pos] = target_token  ← 用大模型的替换</span>
+        后续所有 draft 全部丢弃
+
+if 全部接受:
+    output[K] = bonus_token  ← 白赚一个!</code></pre>
+
+    <p><strong>举例：</strong></p>
+<div class="diagram">小模型猜: [the, cat, sat, on]    (K=4)
+大模型验: [the, cat, is,  ...]
+
+pos=0: draft=the, target=the → <span class="c-green">接受 ✓</span>
+pos=1: draft=cat, target=cat → <span class="c-green">接受 ✓</span>
+pos=2: draft=sat, target=is  → <span class="c-red">拒绝 ✗</span> → output[2]=is, 停止
+
+最终输出: [the, cat, is]  (3个token, 比普通的1个多了2个)</div>
+  </div>
+
+  <div class="card">
+    <h3>验证机制 B：Random 验证 (temperature>0)</h3>
+    <p>基于论文 <a href="https://arxiv.org/abs/2211.17192" style="color:var(--accent-cyan)">Leviathan et al. 2022</a> 的概率接受方法：</p>
+<pre><code>对每个 draft 位置 pos = 0, 1, ..., K-1:
+    draft_token = 小模型猜的 token
+    p_draft  = 小模型对 draft_token 的概率
+    p_target = 大模型对 draft_token 的概率
+    u        = uniform(0, 1) 随机数
+
+    if p_draft > 0 AND <span class="c-cyan">p_target / p_draft >= u</span>:
+        <span class="c-green">接受!</span>
+    else:
+        <span class="c-red">拒绝!</span> 从调整后分布 max(p_target - p_draft, 0) 采样 recovered token
+        后续全部丢弃
+
+if 全部接受:
+    output[K] = bonus_token</code></pre>
+
+    <div class="callout callout-key">
+      <strong>Recovered Token 的数学保证：</strong><br>
+      <code>adjusted_prob[v] = max(p_target[v] - p_draft[v], 0)</code><br>
+      从调整后的分布采样，保证投机推理的输出分布<strong>与直接用大模型生成完全一致</strong>——数学上等价，不会降低生成质量。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>验证决策总览</h3>
+<div class="diagram">         <span class="c-orange">Greedy (temperature=0)</span>
+         ┌───────────────────────────────┐
+         │ draft_token == argmax(target)? │
+         │      ↙          ↘            │
+         │    Yes          No            │
+         │ <span class="c-green">接受 draft</span>    <span class="c-red">拒绝, 用 target</span>  │
+         └───────────────────────────────┘
+
+         <span class="c-purple">Random (temperature>0)</span>
+         ┌───────────────────────────────┐
+         │ p_target(draft_token)          │
+         │ ───────────────── ≥ uniform ?  │
+         │ p_draft(draft_token)           │
+         │      ↙          ↘            │
+         │    Yes          No            │
+         │ <span class="c-green">接受 draft</span>    <span class="c-red">拒绝, 从</span>         │
+         │             <span class="c-red">max(p_t-p_d,0) 采样</span>│
+         └───────────────────────────────┘</div>
+  </div>
+
+  <div class="card">
+    <h3>性能收益分析</h3>
+    <p>假设 draft K=5 个 token，大模型 forward 时间 T，小模型（EAGLE 头）0.1T：</p>
+    <table>
+      <tr><th>场景</th><th>接受数</th><th>产出 token</th><th>耗时</th><th>加速比</th></tr>
+      <tr><td>全部接受</td><td>5/5</td><td>6 (5+bonus)</td><td>1.5T</td><td><span class="c-green">4x</span></td></tr>
+      <tr><td>接受 3 个</td><td>3/5</td><td>4 (3+recovered)</td><td>1.5T</td><td><span class="c-green">2.67x</span></td></tr>
+      <tr><td>全部拒绝</td><td>0/5</td><td>1 (recovered)</td><td>1.5T</td><td><span class="c-red">0.67x (变慢!)</span></td></tr>
+    </table>
+    <div class="callout callout-warn">
+      <strong>投机推理的价值完全取决于小模型的预测准确率。</strong><br>
+      EAGLE 通过直接使用大模型的 hidden states，通常能达到 70-90% 的接受率，实现 2-3x 加速。
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Worker 线程处理</h3>
+    <p>整个投机推理在<strong>同一个 GPU Worker 进程</strong>内完成：</p>
+    <table>
+      <tr><th>Drafter 类型</th><th>运行位置</th><th>与大模型的关系</th></tr>
+      <tr><td>EAGLE</td><td>同 GPU</td><td>共享 embedding/lm_head，使用大模型 hidden states</td></tr>
+      <tr><td>Draft Model</td><td>同 GPU</td><td>独立小模型，参数量更少</td></tr>
+      <tr><td>Medusa</td><td>同 GPU</td><td>多头并行预测</td></tr>
+      <tr><td>N-gram</td><td>CPU</td><td>纯模式匹配，不需要模型</td></tr>
+    </table>
+  </div>
+</div>
+
+</div><!-- container -->
+
+<div style="text-align:center; padding:40px; color:var(--text-muted); font-size:0.85em; border-top:1px solid var(--border);">
+  vLLM Deep Dive | 基于 vLLM V1 源码分析 | Generated 2026-04-02
+</div>
+
+<script>
+// Smooth scroll for nav links
+document.querySelectorAll('.nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const target = document.querySelector(a.getAttribute('href'));
+    if (target) target.scrollIntoView({ behavior: 'smooth' });
+  });
+});
+
+// Highlight active nav link on scroll
+const sections = document.querySelectorAll('.section');
+const navLinks = document.querySelectorAll('.nav a');
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const link = document.querySelector(`.nav a[href="#${entry.target.id}"]`);
+      if (link) link.classList.add('active');
+    }
+  });
+}, { threshold: 0.2, rootMargin: '-60px 0px -60% 0px' });
+sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
