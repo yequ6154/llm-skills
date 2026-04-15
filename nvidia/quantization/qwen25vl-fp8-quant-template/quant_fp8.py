@@ -4,7 +4,11 @@ Qwen2.5-VL FP8 Dynamic 量化脚本
 前置条件:
   1. 使用 vllm-openai:v0.10.2 镜像启动容器
   2. 已执行 setup_and_patch.sh 安装依赖并 patch transformers
-  3. 使用 device_map='cuda:0' 加载模型（必须单卡，不能用 'auto'）
+
+用卡数量通过 CUDA_VISIBLE_DEVICES 控制:
+  - 7B 模型: 单卡即可, 如 "0"
+  - 14B/32B 模型: 2 卡, 如 "0,1"
+  - 72B 模型: 4+ 卡, 如 "0,1,2,3"
 """
 
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
@@ -16,13 +20,12 @@ import os
 # ============================================
 # 根据实际情况修改以下三个变量
 # ============================================
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "4"          # 7B 单卡; 大模型改成 "4,5" 等
 MODEL_ID = "/models/BR-VL-NPL-Classification-CreditCard-V2.0-20260409/release-v2"
 SAVE_DIR = "/models/BR-VL-NPL-Classification-CreditCard-V2.0-20260409-FP8-Dynamic"
 
-# 加载模型（必须用 cuda:0，不能用 auto，否则会触发 offload bug）
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    MODEL_ID, trust_remote_code=False, torch_dtype="auto", device_map="cuda:0"
+    MODEL_ID, trust_remote_code=False, torch_dtype="auto", device_map="auto"
 )
 processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=False)
 
@@ -40,10 +43,8 @@ recipe = QuantizationModifier(
     ],
 )
 
-# 执行量化
 oneshot(model=model, recipe=recipe)
 
-# 保存量化后的模型
 model.save_pretrained(SAVE_DIR, save_compressed=True)
 processor.save_pretrained(SAVE_DIR)
 
