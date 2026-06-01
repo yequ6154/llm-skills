@@ -1,0 +1,89 @@
+# 光线分析 & 女友模式 — 跨端对齐 Spec
+# iOS / Android 实现必须遵循此文件中的阈值与文案
+# 版本: 0.1.0
+
+girlfriend_mode:
+  exposure_bias_ev: 0.3          # 相对人脸测光的曝光补偿
+  warmth_k: 200                  # 色温偏移（偏暖）
+  contrast_delta: -0.1           # 对比度调整 (-1 ~ 1)
+  saturation_delta: 0.05         # 饱和度调整
+  hdr: auto                      # auto | on | off
+  analysis_interval_frames: 3    # 每 N 帧执行一次 Vision 分析
+
+light_types:
+  good:
+    conditions:
+      face_luma_min: 0.25
+      face_to_bg_ratio_min: 0.6
+      face_to_bg_ratio_max: 1.4
+      vertical_gradient_max: 0.30
+      left_right_diff_max: 0.35
+    score_min: 75
+    hint: "光线不错，可以拍了 ✓"
+    hint_en: "Lighting looks good, go ahead!"
+
+  backlit:
+    conditions:
+      face_to_bg_ratio_max: 0.5
+    score_max: 50
+    hint: "逆光了，让她转身面向亮处"
+    hint_en: "Backlit — ask her to face the light source"
+    auto_actions:
+      - increase_exposure_bias: 0.5
+      - enable_hdr: true
+
+  top_light:
+    conditions:
+      vertical_gradient_min: 0.35   # (forehead_luma - chin_luma) / face_luma
+    score_max: 55
+    hint: "顶光显脸肿，移到有阴影的地方"
+    hint_en: "Overhead light — move to a shaded spot"
+
+  side_light:
+    conditions:
+      left_right_diff_min: 0.40     # |left_half - right_half| / face_luma
+    score_max: 60
+    hint: "侧光不均匀，让她转半圈"
+    hint_en: "Uneven side light — ask her to turn slightly"
+
+  low_light:
+    conditions:
+      face_luma_max: 0.15
+    score_max: 40
+    hint: "太暗了，靠近灯光或开闪光灯"
+    hint_en: "Too dark — move closer to light or use flash"
+    auto_actions:
+      - suggest_flash: true
+      - increase_exposure_bias: 0.7
+
+pre_shutter_qa:
+  blur:
+    laplacian_variance_min: 100.0
+    hint: "有点糊，手稳一点"
+  overexposed:
+    face_highlight_percent_max: 95
+    hint: "脸太亮了，点「暗一点」"
+  underexposed:
+    face_luma_min: 0.20
+    hint: "脸太暗，靠近亮处"
+  crop_head:
+    head_margin_ratio_min: 0.05     # 头顶距帧顶的最小比例
+    hint: "退后一步，把头顶留出来"
+  crop_chin:
+    chin_margin_ratio_min: 0.03
+    hint: "手机放低一点，别切下巴"
+  eyes_closed:
+    ear_threshold: 0.2              # Eye Aspect Ratio
+    hint: "眨眼了，再拍一张"
+
+ui:
+  light_score:
+    green_min: 75
+    yellow_min: 50
+    # below 50 = red
+  exposure_slider:
+    min_ev: -1.0
+    max_ev: 1.0
+    labels:
+      darker: "暗一点"
+      brighter: "亮一点"
