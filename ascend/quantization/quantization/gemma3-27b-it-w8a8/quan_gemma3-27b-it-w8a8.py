@@ -11,7 +11,8 @@ from transformers import AutoTokenizer, AutoModel, Gemma3ForConditionalGeneratio
 import torch
 
 current_directory = os.path.dirname(os.path.abspath(__file__))
-parent_directory = os.path.abspath(os.path.join(current_directory, '..', "..",".."))
+#parent_directory = os.path.abspath(os.path.join(current_directory, '..', "msit","msmodelslim"))
+parent_directory = "/home/lei.xiong/script/gemma3/msit/msmodelslim"
 print(f"{parent_directory=}")
 sys.path.append(parent_directory)
 

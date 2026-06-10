@@ -16,12 +16,20 @@
 cd msit/msmodelslim
 bash install.sh
 3、在当前目录下执行量化脚本
+cd example/
+touch __init__.py
+cd ..
+python3 ../../quantization.py 
 
 
 3、
 1)将w8a8权重目录下的quant_model_description.json中的model.language_model.替换为model.
 2)model.vision_tower.vision_model.替换为vision_tower.vision_model.
-3)将w8a8权重目录下的model.safetensors.index.json文件中的权重文件名称全部改为量化的权重文件名称
-
-
+3)将w8a8权重目录下的model.safetensors.index.json文件中的权重文件名称全部改为量化的权重文件名称(应该是量化的过程已经修改好了)
+直接执行
+python transform_keys.py /path/to/quant_model_description.json --in-place （修改原文件）
+或
+python3 transform_model_keys.py quant_model_description.json --use-regex （使用正则表达式版本）
+或
+python3 transform_model_keys.py quant_model_description.json -o quant_model_description_modified.json （指定输出文件名）
 
